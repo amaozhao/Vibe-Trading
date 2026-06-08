@@ -371,6 +371,12 @@ def _sync_provider_env() -> None:
         os.environ.pop("OPENAI_API_KEY", None)
         return
 
+    if provider in {"minimax-token-plan", "minimax_token_plan"}:
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("OPENAI_API_BASE", None)
+        os.environ.pop("OPENAI_BASE_URL", None)
+        return
+
     # (api_key_env, base_url_env)
     _PROVIDER_MAP: dict[str, tuple[str | None, str]] = {
         "openai":     ("OPENAI_API_KEY",     "OPENAI_BASE_URL"),
@@ -437,6 +443,15 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
             temperature=temperature,
             timeout=int(os.getenv("TIMEOUT_SECONDS", "120")),
             reasoning_effort=effort or None,
+        )
+
+    if provider in {"minimax-token-plan", "minimax_token_plan"}:
+        from src.providers.minimax_token_plan import MiniMaxTokenPlanLLM
+
+        return MiniMaxTokenPlanLLM(
+            model=name,
+            temperature=float(os.getenv("LANGCHAIN_TEMPERATURE", "1.0") or "1.0"),
+            timeout=int(os.getenv("TIMEOUT_SECONDS", "120")),
         )
 
     if ChatOpenAI is None:

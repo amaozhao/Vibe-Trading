@@ -1,4 +1,5 @@
 ﻿import { Bot, TrendingUp, Globe, Sparkles, Users, UserCircle2, NotebookPen, Landmark } from "lucide-react";
+import { useTranslation } from "@/lib/i18n";
 
 interface Example {
   title: string;
@@ -168,11 +169,62 @@ const CAPABILITY_CHIPS = [
   "Session Search",
 ];
 
+const CAPABILITY_CHIPS_ZH = [
+  "金融技能库",
+  "智能体团队",
+  "自动发现工具",
+  "3 类市场：A 股 · Crypto · 港/美股",
+  "交易连接器配置",
+  "分钟到日线周期",
+  "4 类组合优化器",
+  "15+ 风险指标",
+  "期权与衍生品",
+  "PDF 与网页研究",
+  "因子分析与机器学习",
+  "交易日志分析",
+  "Shadow Account 回测",
+  "持久记忆",
+  "会话搜索",
+];
+
+const CATEGORY_LABEL_ZH: Record<string, string> = {
+  "Multi-Market Backtest": "多市场回测",
+  "Research & Analysis": "研究分析",
+  "Swarm Teams": "智能体团队",
+  "Document & Web Research": "文档与网页研究",
+  "Trade Journal": "交易日志",
+  "Trading Connectors": "交易连接器",
+  "Shadow Account": "Shadow Account",
+};
+
+const EXAMPLE_TEXT_ZH: Record<string, { title: string; desc: string }> = {
+  "Cross-Market Portfolio": { title: "跨市场组合", desc: "A 股 + Crypto + 美股，使用风险平价优化器" },
+  "BTC 5-Min MACD Strategy": { title: "BTC 5 分钟 MACD 策略", desc: "使用 OKX 实时数据做分钟级 Crypto 回测" },
+  "US Tech Max Diversification": { title: "美股科技最大分散组合", desc: "通过 yfinance 优化 FAANG+ 组合" },
+  "Multi-Factor Alpha Model": { title: "多因子 Alpha 模型", desc: "在 300 只股票上做 IC 加权因子合成" },
+  "Options Greeks Analysis": { title: "期权 Greeks 分析", desc: "Black-Scholes 定价和 Delta/Gamma/Theta/Vega" },
+  "Investment Committee Review": { title: "投委会评审", desc: "多智能体辩论：多空观点、风险审查、PM 决策" },
+  "Quant Strategy Desk": { title: "量化策略桌", desc: "筛选、因子研究、回测、风险审计流水线" },
+  "Analyze an Earnings Report PDF": { title: "分析财报 PDF", desc: "上传 PDF 并询问财务数据" },
+  "Web Research: Macro Outlook": { title: "网页研究：宏观展望", desc: "读取实时网页来源并总结宏观影响" },
+  "Analyze My Broker Export": { title: "分析券商导出记录", desc: "解析同花顺/东财/富途/通用 CSV 的交易统计" },
+  "Diagnose My Behavior Biases": { title: "诊断交易行为偏差", desc: "处置效应、过度交易、追涨、锚定等诊断" },
+  "Check Selected Connector": { title: "检查已选连接器", desc: "列出连接器配置并检查当前选中项" },
+  "Analyze Connector Portfolio": { title: "分析连接器组合", desc: "读取账户摘要和持仓，保持只读" },
+  "Quote & Trend": { title: "报价与趋势", desc: "通过当前连接器获取报价和近期日线" },
+  "Train My Shadow from Journal": { title: "从日志训练 Shadow", desc: "从券商 CSV 提取你的策略规则" },
+  "How Much Am I Leaving on the Table?": { title: "我少赚了多少？", desc: "回测 Shadow 策略并归因实际 PnL 差异" },
+  "Generate Shadow Report": { title: "生成 Shadow 报告", desc: "8 段 HTML/PDF 报告，含权益曲线和归因瀑布图" },
+};
+
 interface Props {
   onExample: (s: string) => void;
 }
 
 export function WelcomeScreen({ onExample }: Props) {
+  const { language, t } = useTranslation();
+  const isZh = language === "zh-CN";
+  const chips = isZh ? CAPABILITY_CHIPS_ZH : CAPABILITY_CHIPS;
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 text-center">
       {/* Header */}
@@ -183,17 +235,17 @@ export function WelcomeScreen({ onExample }: Props) {
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Vibe-Trading</h2>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto leading-relaxed">
-            vibe trading with your professional financial agent team
+            {t("agent.welcomeTagline")}
           </p>
           <p className="text-sm text-muted-foreground mt-2 max-w-md leading-relaxed mx-auto">
-            Describe a trading strategy to get started.
+            {t("agent.welcomePrompt")}
           </p>
         </div>
       </div>
 
       {/* Capability chips */}
       <div className="flex flex-wrap justify-center gap-2 max-w-lg">
-        {CAPABILITY_CHIPS.map((chip) => (
+        {chips.map((chip) => (
           <span
             key={chip}
             className="px-2.5 py-1 text-xs rounded-full border border-border/60 text-muted-foreground bg-muted/30"
@@ -205,13 +257,13 @@ export function WelcomeScreen({ onExample }: Props) {
 
       {/* Example categories grid */}
       <div className="w-full max-w-2xl text-left space-y-4">
-        <p className="text-xs text-muted-foreground px-1">Try an example:</p>
+        <p className="text-xs text-muted-foreground px-1">{t("agent.tryExample")}</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {CATEGORIES.map((cat) => (
             <div key={cat.label} className="space-y-2">
               <div className={`flex items-center gap-1.5 text-xs font-medium px-1 ${cat.color.split(" ").filter(c => c.startsWith("text-")).join(" ")}`}>
                 {cat.icon}
-                <span>{cat.label}</span>
+                <span>{isZh ? CATEGORY_LABEL_ZH[cat.label] : cat.label}</span>
               </div>
               <div className="space-y-1.5">
                 {cat.examples.map((ex) => (
@@ -221,10 +273,10 @@ export function WelcomeScreen({ onExample }: Props) {
                     className={`block w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${cat.color}`}
                   >
                     <span className="text-sm font-medium text-foreground leading-snug">
-                      {ex.title}
+                      {isZh ? (EXAMPLE_TEXT_ZH[ex.title]?.title ?? ex.title) : ex.title}
                     </span>
                     <span className="block text-xs text-muted-foreground mt-0.5 leading-snug">
-                      {ex.desc}
+                      {isZh ? (EXAMPLE_TEXT_ZH[ex.title]?.desc ?? ex.desc) : ex.desc}
                     </span>
                   </button>
                 ))}

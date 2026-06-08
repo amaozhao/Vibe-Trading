@@ -114,6 +114,49 @@ def test_update_llm_settings_persists_project_env(
     assert "sk-or-v1-your-key-here" not in env_text
 
 
+def test_update_llm_settings_persists_minimax_token_plan_without_openai_runtime_env(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "stale-openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://stale.example/v1")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://stale.example/v1")
+
+    response = client.put(
+        "/settings/llm",
+        json={
+            "provider": "minimax-token-plan",
+            "model_name": "MiniMax-M3",
+            "base_url": "https://api.minimaxi.com/anthropic",
+            "api_key": "token-plan-secret",
+            "temperature": 1.0,
+            "timeout_seconds": 120,
+            "max_retries": 2,
+            "reasoning_effort": "",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "minimax-token-plan"
+    assert body["api_key_env"] == "MINIMAX_TOKEN_PLAN_API_KEY"
+    assert body["api_key_configured"] is True
+    assert "token-plan-secret" not in response.text
+
+    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "LANGCHAIN_PROVIDER=minimax-token-plan" in env_text
+    assert "LANGCHAIN_MODEL_NAME=MiniMax-M3" in env_text
+    assert "MINIMAX_TOKEN_PLAN_API_KEY=token-plan-secret" in env_text
+    assert "MINIMAX_TOKEN_PLAN_BASE_URL=https://api.minimaxi.com/anthropic" in env_text
+    assert "OPENAI_API_KEY" not in env_text
+    assert "OPENAI_BASE_URL" not in env_text
+
+    import os
+
+    assert "OPENAI_API_KEY" not in os.environ
+    assert "OPENAI_BASE_URL" not in os.environ
+    assert "OPENAI_API_BASE" not in os.environ
+
+
 def test_get_data_source_settings_treats_placeholder_as_unconfigured(
     client: TestClient, tmp_path: Path,
 ) -> None:

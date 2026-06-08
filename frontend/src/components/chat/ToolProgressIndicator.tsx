@@ -3,6 +3,7 @@ import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProgressBar } from "@/components/chat/ProgressBar";
 import { localizeToolName } from "@/lib/tools";
+import { useTranslation } from "@/lib/i18n";
 import type { ToolCallEntry } from "@/types/agent";
 
 /* ---------- ETA tracking (per-tool) ---------- */
@@ -62,9 +63,12 @@ interface RowProps {
   isHeader?: boolean;
   connector?: "branch" | "end" | "none";
   eta: number | null;
+  toolsRunningLabel: string;
+  stepLabelText: string;
+  secondsLeftLabel: string;
 }
 
-function ToolRow({ entry, stepIndex, totalSteps, isHeader, connector = "none", eta }: RowProps): JSX.Element {
+function ToolRow({ entry, stepIndex, totalSteps, isHeader, connector = "none", eta, toolsRunningLabel, stepLabelText, secondsLeftLabel }: RowProps): JSX.Element {
   const progress = entry.progress;
   const hasDeterminate = !!(progress && typeof progress.current === "number" && typeof progress.total === "number" && progress.total > 0);
   const stage = progress?.stage || "";
@@ -80,8 +84,8 @@ function ToolRow({ entry, stepIndex, totalSteps, isHeader, connector = "none", e
 
   const localized = localizeToolName(entry.tool);
   const stepLabel = isHeader
-    ? `${totalSteps} tools running`
-    : `Step ${stepIndex} · ${localized}`;
+    ? `${totalSteps} ${toolsRunningLabel}`
+    : `${stepLabelText} ${stepIndex} · ${localized}`;
 
   return (
     <div className="flex flex-col sm:flex-row sm:items-center gap-x-2 gap-y-0.5 text-xs min-w-0">
@@ -118,7 +122,7 @@ function ToolRow({ entry, stepIndex, totalSteps, isHeader, connector = "none", e
           )}
           {eta != null && (
             <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0">
-              ~{eta}s left
+              ~{eta}{secondsLeftLabel}
             </span>
           )}
         </div>
@@ -142,6 +146,7 @@ interface Props {
 const MAX_VISIBLE = 3;
 
 export function ToolProgressIndicator({ toolCalls }: Props): JSX.Element | null {
+  const { t } = useTranslation();
   // Per-tool ETA samples (mutable across renders, not state to avoid re-renders).
   const etaSamplesRef = useRef<Map<string, EtaSample>>(new Map());
 
@@ -213,6 +218,9 @@ export function ToolProgressIndicator({ toolCalls }: Props): JSX.Element | null 
           stepIndex={totalSoFar}
           totalSteps={running.length}
           eta={eta}
+          toolsRunningLabel={t("agent.toolsRunning")}
+          stepLabelText={t("agent.step")}
+          secondsLeftLabel={t("agent.secondsLeft")}
         />
       </div>
     );
@@ -229,7 +237,7 @@ export function ToolProgressIndicator({ toolCalls }: Props): JSX.Element | null 
       {/* Header row */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         {aggregateIcon}
-        <span className="text-foreground">{running.length} tools running</span>
+        <span className="text-foreground">{running.length} {t("agent.toolsRunning")}</span>
       </div>
       {/* Indented rows */}
       <div className="pl-4 space-y-1">
@@ -241,12 +249,15 @@ export function ToolProgressIndicator({ toolCalls }: Props): JSX.Element | null 
             totalSteps={running.length}
             connector={i === rows.length - 1 && overflow === 0 ? "end" : "branch"}
             eta={computeEta(tc)}
+            toolsRunningLabel={t("agent.toolsRunning")}
+            stepLabelText={t("agent.step")}
+            secondsLeftLabel={t("agent.secondsLeft")}
           />
         ))}
         {overflow > 0 && (
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
             <span className="text-border/60 shrink-0 w-3 text-center" aria-hidden="true">└</span>
-            <span>… +{overflow} more</span>
+            <span>… +{overflow} {t("agent.moreTools")}</span>
           </div>
         )}
       </div>

@@ -980,7 +980,12 @@ def _sync_runtime_env(provider: LLMProviderOption, updates: Dict[str, str]) -> N
         else:
             os.environ.pop(key, None)
 
-    if provider.api_key_env:
+    if provider.auth_type == "anthropic_api_key":
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("OPENAI_API_BASE", None)
+        os.environ.pop("OPENAI_BASE_URL", None)
+        return
+    elif provider.api_key_env:
         key_value = os.environ.get(provider.api_key_env, "")
         if _is_configured_secret(key_value, LLM_API_KEY_PLACEHOLDERS):
             os.environ["OPENAI_API_KEY"] = key_value

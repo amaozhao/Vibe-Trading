@@ -53,7 +53,10 @@ def _check_llm_provider() -> CheckResult:
         )
 
     _sync_provider_env()
-    base_url = os.getenv("OPENAI_BASE_URL", "") or os.getenv("OPENAI_API_BASE", "")
+    if provider.lower() in {"minimax-token-plan", "minimax_token_plan"}:
+        base_url = os.getenv("MINIMAX_TOKEN_PLAN_BASE_URL", "")
+    else:
+        base_url = os.getenv("OPENAI_BASE_URL", "") or os.getenv("OPENAI_API_BASE", "")
 
     if provider.lower() in {"openai-codex", "openai_codex"}:
         try:
@@ -101,7 +104,7 @@ def _check_llm_provider() -> CheckResult:
         ping_url = base_url.rstrip("/")
         if ping_url.endswith("/v1"):
             ping_url = ping_url[:-3]
-        resp = requests.get(ping_url, timeout=10)
+        requests.get(ping_url, timeout=10)
         return CheckResult(
             name=f"LLM ({provider})",
             status="ready",

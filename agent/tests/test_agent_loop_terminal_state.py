@@ -14,18 +14,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-import pytest
-
 from src.agent.loop import AgentLoop
 
 
 class _StubLLMResponse:
     """Minimal stand-in for ChatLLM's response object."""
 
-    def __init__(self) -> None:
-        self.content = ""
+    def __init__(self, content: str = "", finish_reason: str = "stop") -> None:
+        self.content = content
         self.tool_calls: list[Any] = []
         self.reasoning_content: str | None = None
+        self.finish_reason = finish_reason
+        self.usage_metadata: dict[str, int] = {}
         self.has_tool_calls = False
 
 
@@ -179,3 +179,44 @@ def test_force_text_only_on_last_iteration(tmp_path: Path) -> None:
     assert result["status"] == "success"
     assert "Final answer" in result["content"]
     assert result["iterations"] == 5
+
+
+class _StubLLMTruncatedThenComplete:
+    """LLM stub that hits the provider output limit once, then continues."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, Any]]] = []
+
+    def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[Any] | None = None,
+        on_text_chunk: Callable[[str], None] | None = None,
+    ) -> _StubLLMResponse:
+        del tools, on_text_chunk
+        self.calls.append([dict(item) for item in messages])
+        if len(self.calls) == 1:
+            return _StubLLMResponse("章节 1-4，结尾停在历史中位", finish_reason="length")
+        return _StubLLMResponse("数。\n章节 5-8。", finish_reason="stop")
+
+    def chat(self, messages: list[dict[str, Any]], **_: Any) -> _StubLLMResponse:
+        self.calls.append([dict(item) for item in messages])
+        return _StubLLMResponse("数。\n章节 5-8。", finish_reason="stop")
+
+
+def test_continues_plain_text_answer_after_length_finish_reason(tmp_path: Path) -> None:
+    """A provider-side output cap must trigger a continuation turn, not a
+    falsely completed truncated answer."""
+    llm = _StubLLMTruncatedThenComplete()
+    agent = _build_agent(llm, max_iter=5, tmp_run_dir=tmp_path / "run")
+
+    result = agent.run(user_message="write a long report")
+
+    assert result["status"] == "success"
+    assert result["content"] == "章节 1-4，结尾停在历史中位数。\n章节 5-8。"
+    assert len(llm.calls) == 2
+    assert llm.calls[1][-2] == {
+        "role": "assistant",
+        "content": "章节 1-4，结尾停在历史中位",
+    }
+    assert "Continue the previous answer exactly from where it stopped" in llm.calls[1][-1]["content"]

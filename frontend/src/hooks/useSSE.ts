@@ -103,6 +103,7 @@ export function useSSE(config?: SSEConfig) {
         parsed = { raw: raw.data };
       }
 
+      handlersRef.current["*"]?.({ eventType, ...parsed });
       const handler = handlersRef.current[eventType] ?? handlersRef.current["message"];
       handler?.(parsed);
     };

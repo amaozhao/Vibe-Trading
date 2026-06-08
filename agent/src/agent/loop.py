@@ -42,6 +42,10 @@ KEEP_RECENT = 3
 TOOL_RESULT_LIMIT = 10_000
 HEARTBEAT_INTERVAL_S = float(os.getenv("VT_HEARTBEAT_INTERVAL_S", "3.0"))
 GOAL_MAX_CONTINUATIONS = int(os.getenv("VIBE_TRADING_GOAL_MAX_CONTINUATIONS", "3"))
+LENGTH_CONTINUATION_PROMPT = (
+    "[SYSTEM] Continue the previous answer exactly from where it stopped. "
+    "Do not restart, do not summarize, and do not repeat already-written sections."
+)
 
 # Layer 2: Context collapse thresholds
 COLLAPSE_THRESHOLD = int(TOKEN_THRESHOLD * 0.7)
@@ -394,6 +398,7 @@ class AgentLoop:
 
         iteration = 0
         final_content = ""
+        final_content_parts: list[str] = []
         goal_continuations = 0
         goal_last_progress: tuple[int, int] | None = None
         wrap_up_at = max(1, int(self.max_iterations * 0.8))
@@ -509,7 +514,28 @@ class AgentLoop:
                     self._emit("thinking_done", {"iter": iteration, "content": thinking_text[:500]})
 
                 if not response.has_tool_calls:
-                    final_content = response.content or ""
+                    response_content = response.content or ""
+                    if (
+                        getattr(response, "finish_reason", "stop") == "length"
+                        and response_content
+                        and not is_last_iteration
+                    ):
+                        final_content_parts.append(response_content)
+                        messages.append({"role": "assistant", "content": response_content})
+                        messages.append({"role": "user", "content": LENGTH_CONTINUATION_PROMPT})
+                        trace.write(
+                            {
+                                "type": "answer_truncated",
+                                "iter": iteration,
+                                "content": response_content[:2000],
+                            }
+                        )
+                        react_trace.append(
+                            {"type": "answer_truncated", "content": response_content[:500]}
+                        )
+                        continue
+
+                    final_content = "".join(final_content_parts) + response_content
                     should_continue_goal = False
                     continuation_snapshot = None
                     if active_goal_id and session_id and GOAL_MAX_CONTINUATIONS > 0:

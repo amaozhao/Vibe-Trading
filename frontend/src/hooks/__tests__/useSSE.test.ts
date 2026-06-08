@@ -138,6 +138,20 @@ describe("useSSE — event handling", () => {
     expect(messages).toHaveLength(1);
   });
 
+  it("dispatches every known event to wildcard handler", () => {
+    const seen: unknown[] = [];
+    const { result } = renderHook(() => useSSE());
+
+    act(() =>
+      result.current.connect("http://test/events", {
+        "*": (data) => seen.push(data),
+      }),
+    );
+
+    act(() => MockEventSource.latest.emit("heartbeat", { ts: 123 }, "evt-heartbeat"));
+    expect(seen).toEqual([{ eventType: "heartbeat", ts: 123 }]);
+  });
+
   it("handles malformed JSON gracefully", () => {
     const messages: unknown[] = [];
     const { result } = renderHook(() => useSSE());

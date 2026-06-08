@@ -101,6 +101,16 @@
     "api_key_required": true
   },
   {
+    "name": "minimax-token-plan",
+    "label": "MiniMax Token Plan",
+    "api_key_env": "MINIMAX_TOKEN_PLAN_API_KEY",
+    "base_url_env": "MINIMAX_TOKEN_PLAN_BASE_URL",
+    "default_model": "MiniMax-M3",
+    "default_base_url": "https://api.minimaxi.com/anthropic",
+    "api_key_required": true,
+    "auth_type": "anthropic_api_key"
+  },
+  {
     "name": "mimo",
     "label": "Xiaomi MIMO",
     "api_key_env": "MIMO_API_KEY",

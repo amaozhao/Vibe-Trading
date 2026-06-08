@@ -362,6 +362,7 @@ def _provider_key_env(provider: str | None) -> str | None:
         "zhipu": "ZHIPU_API_KEY",
         "moonshot": "MOONSHOT_API_KEY",
         "minimax": "MINIMAX_API_KEY",
+        "minimax-token-plan": "MINIMAX_TOKEN_PLAN_API_KEY",
         "mimo": "MIMO_API_KEY",
         "zai": "ZAI_API_KEY",
     }.get((provider or "").lower())
@@ -381,6 +382,7 @@ def _provider_base_env(provider: str | None) -> str | None:
         "zhipu": "ZHIPU_BASE_URL",
         "moonshot": "MOONSHOT_BASE_URL",
         "minimax": "MINIMAX_BASE_URL",
+        "minimax-token-plan": "MINIMAX_TOKEN_PLAN_BASE_URL",
         "mimo": "MIMO_BASE_URL",
         "zai": "ZAI_BASE_URL",
         "ollama": "OLLAMA_BASE_URL",
@@ -4177,6 +4179,16 @@ _PROVIDER_CHOICES: list[dict[str, str | None]] = [
         "model": "MiniMax-M3",
         "key_prefix": None,
         "key_placeholder": "api-key...",
+    },
+    {
+        "label": "MiniMax Token Plan",
+        "provider": "minimax-token-plan",
+        "key_env": "MINIMAX_TOKEN_PLAN_API_KEY",
+        "base_env": "MINIMAX_TOKEN_PLAN_BASE_URL",
+        "base_url": "https://api.minimaxi.com/anthropic",
+        "model": "MiniMax-M3",
+        "key_prefix": None,
+        "key_placeholder": "token-plan-key...",
     },
     {
         "label": "Xiaomi MIMO",

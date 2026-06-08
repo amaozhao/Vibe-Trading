@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from unittest.mock import patch
-
-import pytest
 
 from src.providers.llm import _sync_provider_env, build_llm
 
@@ -24,7 +23,22 @@ class TestSyncProviderEnv:
         import src.providers.llm as llm_mod
         llm_mod._dotenv_loaded = True  # pretend already loaded
 
-        clean = {k: v for k, v in os.environ.items() if not k.startswith(("OPENAI_", "LANGCHAIN_", "DEEPSEEK_", "GROQ_", "OLLAMA_", "DASHSCOPE_", "ZAI_"))}
+        clean = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(
+                (
+                    "OPENAI_",
+                    "LANGCHAIN_",
+                    "DEEPSEEK_",
+                    "GROQ_",
+                    "OLLAMA_",
+                    "DASHSCOPE_",
+                    "ZAI_",
+                    "MINIMAX_",
+                )
+            )
+        }
         clean.update(env)
         with patch.dict(os.environ, clean, clear=True):
             _sync_provider_env()
@@ -132,6 +146,16 @@ class TestSyncProviderEnv:
         })
         assert "minimax.io" in result["OPENAI_BASE_URL"]
 
+    def test_minimax_token_plan_provider_does_not_map_to_openai_env(self) -> None:
+        result = self._run_sync({
+            "LANGCHAIN_PROVIDER": "minimax-token-plan",
+            "MINIMAX_TOKEN_PLAN_API_KEY": "token-plan-key",
+            "MINIMAX_TOKEN_PLAN_BASE_URL": "https://api.minimaxi.com/anthropic",
+        })
+        assert result["OPENAI_API_KEY"] == ""
+        assert result["OPENAI_API_BASE"] == ""
+        assert result["OPENAI_BASE_URL"] == ""
+
 
 # ---------------------------------------------------------------------------
 # MiniMax temperature clamping
@@ -149,7 +173,7 @@ class TestMinimaxTemperature:
         captured: dict[str, float] = {}
 
         class _FakeChatOpenAI:
-            def __init__(self, **kwargs: object) -> None:
+            def __init__(self, **kwargs: Any) -> None:
                 captured["temperature"] = float(kwargs.get("temperature", -1))
 
         env = {
@@ -174,7 +198,7 @@ class TestMinimaxTemperature:
         captured: dict[str, float] = {}
 
         class _FakeChatOpenAI:
-            def __init__(self, **kwargs: object) -> None:
+            def __init__(self, **kwargs: Any) -> None:
                 captured["temperature"] = float(kwargs.get("temperature", -1))
 
         env = {
@@ -237,5 +261,3 @@ class TestReasoningEffortPassthrough:
             "LANGCHAIN_REASONING_EFFORT": "HIGH",
         })
         assert captured["extra_body"]["reasoning"]["effort"] == "high"
-
-
