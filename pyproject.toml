@@ -94,6 +94,9 @@ include = ["src*", "backtest*", "cli*"]
 ibkr = [
     "ib_async>=2.1.0",
 ]
+deepseek = [
+    "langchain-deepseek>=1.0.0,<2",
+]
 dev = [
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",

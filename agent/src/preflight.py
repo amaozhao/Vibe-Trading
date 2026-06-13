@@ -29,7 +29,7 @@ class CheckResult:
 
 def _check_llm_provider() -> CheckResult:
     """Verify LLM provider connectivity."""
-    from src.providers.llm import _ensure_dotenv, _sync_provider_env
+    from src.providers.llm import _ensure_dotenv, _sync_provider_env, provider_diagnostics
 
     _ensure_dotenv()
     provider = os.getenv("LANGCHAIN_PROVIDER", "").strip()
@@ -53,10 +53,18 @@ def _check_llm_provider() -> CheckResult:
         )
 
     _sync_provider_env()
+    diagnostics = provider_diagnostics()
     if provider.lower() in {"minimax-token-plan", "minimax_token_plan"}:
         base_url = os.getenv("MINIMAX_TOKEN_PLAN_BASE_URL", "")
     else:
         base_url = os.getenv("OPENAI_BASE_URL", "") or os.getenv("OPENAI_API_BASE", "")
+    proxy_label = ",".join(sorted(diagnostics.get("proxy", {}).keys())) or "none"
+    diag_hint = (
+        f"base={diagnostics['base_url']} "
+        f"timeout={diagnostics['timeout_seconds']}s "
+        f"retries={diagnostics['max_retries']} "
+        f"proxy={proxy_label}"
+    )
 
     if provider.lower() in {"openai-codex", "openai_codex"}:
         try:
@@ -83,7 +91,7 @@ def _check_llm_provider() -> CheckResult:
         return CheckResult(
             name=f"LLM ({provider})",
             status="ready",
-            message=f"{model} via ChatGPT OAuth ({account})",
+            message=f"{model} via ChatGPT OAuth ({account}) | {diag_hint}",
             impact="",
         )
 
@@ -91,7 +99,7 @@ def _check_llm_provider() -> CheckResult:
         return CheckResult(
             name=f"LLM ({provider})",
             status="not_configured",
-            message=f"base URL not set for {provider}",
+            message=f"base URL not set for {provider} | {diag_hint}",
             impact="agent cannot function",
             critical=True,
         )
@@ -105,17 +113,21 @@ def _check_llm_provider() -> CheckResult:
         if ping_url.endswith("/v1"):
             ping_url = ping_url[:-3]
         requests.get(ping_url, timeout=10)
+        if provider.lower() in {"minimax-token-plan", "minimax_token_plan"}:
+            message = f"{model} via {base_url}"
+        else:
+            message = f"{model} via {diagnostics['base_url']} | {diag_hint}"
         return CheckResult(
             name=f"LLM ({provider})",
             status="ready",
-            message=f"{model} via {base_url}",
+            message=message,
             impact="",
         )
     except Exception as exc:
         return CheckResult(
             name=f"LLM ({provider})",
             status="error",
-            message=f"{type(exc).__name__}: {exc}",
+            message=f"{type(exc).__name__}: {exc} | {diag_hint}",
             impact="agent cannot function",
             critical=True,
         )
