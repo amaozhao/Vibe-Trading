@@ -4,7 +4,7 @@ import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users, 
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
 import { useSSE } from "@/hooks/useSSE";
-import { ApiError, api, type GoalSnapshot, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus } from "@/lib/api";
+import { ApiError, AUTH_REQUIRED_MESSAGE, api, isAuthRequiredError, type GoalSnapshot, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus } from "@/lib/api";
 import { isReportWorthyRun } from "@/lib/runReports";
 import { useTranslation } from "@/lib/i18n";
 import type { AgentMessage, ToolCallEntry } from "@/types/agent";
@@ -770,6 +770,13 @@ export function Agent() {
   /* Safety timeout: if streaming but no SSE event for sseTimeoutMsRef.current ms, reset to idle */
   useEffect(() => {
     if (status !== "streaming") return;
+    // Arm the clock at the start of every streaming turn. Without this, a turn
+    // whose very first event never arrives (e.g. the LLM provider hangs before
+    // emitting a single token) left lastEventRef at its 0 / stale value, so the
+    // guard below short-circuited and the UI hung on "Agent is working…"
+    // forever. touch() refreshes this on every real event; the no-op heartbeat
+    // deliberately does not, so a connection that only keep-alives still trips.
+    lastEventRef.current = Date.now();
     const timer = setInterval(() => {
       if (lastEventRef.current && Date.now() - lastEventRef.current > sseTimeoutMsRef.current && act().status === "streaming") {
         act().setStatus("idle");
@@ -833,10 +840,11 @@ export function Agent() {
       }
       setupSSE(sid);
       await api.sendMessage(sid, finalPrompt);
-    } catch {
+    } catch (error) {
       act().setStatus("error");
-      toast.error(t("agent.sendFailed"));
-      act().addMessage({ id: "", type: "error", content: t("agent.sendFailed"), timestamp: Date.now() });
+      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t("agent.sendFailed");
+      toast.error(message);
+      act().addMessage({ id: "", type: "error", content: message, timestamp: Date.now() });
     }
   };
 
@@ -942,10 +950,11 @@ export function Agent() {
     try {
       setupSSE(sessionId);
       await api.sendMessage(sessionId, prompt);
-    } catch {
+    } catch (error) {
       act().setStatus("error");
-      toast.error(t("agent.continueGoalFailed"));
-      act().addMessage({ id: "", type: "error", content: t("agent.continueGoalFailed"), timestamp: Date.now() });
+      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t("agent.continueGoalFailed");
+      toast.error(message);
+      act().addMessage({ id: "", type: "error", content: message, timestamp: Date.now() });
     }
   }, [forceScrollToBottom, goalSnapshot, sessionId, setupSSE, status, t]);
 
