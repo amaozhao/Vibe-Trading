@@ -260,8 +260,9 @@ class _StubLLMTruncatedThenComplete:
         messages: list[dict[str, Any]],
         tools: list[Any] | None = None,
         on_text_chunk: Callable[[str], None] | None = None,
+        on_reasoning_chunk: Callable[[str], None] | None = None,
     ) -> _StubLLMResponse:
-        del tools, on_text_chunk
+        del tools, on_text_chunk, on_reasoning_chunk
         self.calls.append([dict(item) for item in messages])
         if len(self.calls) == 1:
             return _StubLLMResponse("章节 1-4，结尾停在历史中位", finish_reason="length")
