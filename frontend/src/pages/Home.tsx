@@ -1,15 +1,16 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, Bot, BarChart3, Zap, UserCircle2 } from "lucide-react";
-import { useTranslation, type TranslationKey } from "@/lib/i18n";
+import { useTranslation } from "react-i18next";
 
 export function Home() {
   const { t } = useTranslation();
+
   const FEATURES = [
-    { icon: Bot, titleKey: "home.feature.agent.title", descKey: "home.feature.agent.desc" },
-    { icon: BarChart3, titleKey: "home.feature.backtest.title", descKey: "home.feature.backtest.desc" },
-    { icon: Zap, titleKey: "home.feature.streaming.title", descKey: "home.feature.streaming.desc" },
-    { icon: UserCircle2, titleKey: "home.feature.replay.title", descKey: "home.feature.replay.desc" },
-  ] satisfies Array<{ icon: typeof Bot; titleKey: TranslationKey; descKey: TranslationKey }>;
+    { icon: Bot, title: t("home.featureAgent"), desc: t("home.featureAgentDesc") },
+    { icon: BarChart3, title: t("home.featureBacktest"), desc: t("home.featureBacktestDesc") },
+    { icon: Zap, title: t("home.featureStreaming"), desc: t("home.featureStreamingDesc") },
+    { icon: UserCircle2, title: t("home.featureReplay"), desc: t("home.featureReplayDesc") },
+  ];
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-8">
@@ -25,11 +26,11 @@ export function Home() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-16 max-w-5xl w-full">
-        {FEATURES.map(({ icon: Icon, titleKey, descKey }) => (
-          <div key={titleKey} className="border rounded-lg p-6 space-y-3">
+        {FEATURES.map(({ icon: Icon, title, desc }) => (
+          <div key={title} className="border rounded-lg p-6 space-y-3">
             <Icon className="h-8 w-8 text-primary" />
-            <h3 className="font-semibold">{t(titleKey)}</h3>
-            <p className="text-sm text-muted-foreground">{t(descKey)}</p>
+            <h3 className="font-semibold">{title}</h3>
+            <p className="text-sm text-muted-foreground">{desc}</p>
           </div>
         ))}
       </div>

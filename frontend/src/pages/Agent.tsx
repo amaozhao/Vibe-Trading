@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users, Target, ChevronDown, Pencil, Check, Play, OctagonX, Activity, Ban, CheckCircle2, Landmark } from "lucide-react";
@@ -6,7 +7,6 @@ import { useAgentStore } from "@/stores/agent";
 import { useSSE } from "@/hooks/useSSE";
 import { ApiError, AUTH_REQUIRED_MESSAGE, api, isAuthRequiredError, type GoalSnapshot, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus } from "@/lib/api";
 import { isReportWorthyRun } from "@/lib/runReports";
-import { useTranslation } from "@/lib/i18n";
 import type { AgentMessage, ToolCallEntry } from "@/types/agent";
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
@@ -14,7 +14,6 @@ import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ThinkingTimeline } from "@/components/chat/ThinkingTimeline";
 import { ConversationTimeline } from "@/components/chat/ConversationTimeline";
 import { ToolProgressIndicator } from "@/components/chat/ToolProgressIndicator";
-import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { MandateProposalCard } from "@/components/chat/MandateProposalCard";
 import { RunnerStatus } from "@/components/chat/RunnerStatus";
 import { SwarmStatusCard } from "@/components/chat/SwarmStatusCard";
@@ -46,6 +45,9 @@ function groupMessages(msgs: AgentMessage[]): MsgGroup[] {
 }
 
 const act = () => useAgentStore.getState();
+
+// i18n hook for Agent component — used inside the component below
+// (declared at module scope for helper usage is fine since t() reads from i18n singleton)
 
 /** Poll cadence for the shared `GET /live/status` snapshot. */
 const LIVE_STATUS_POLL_INTERVAL_MS = 15_000;
@@ -109,7 +111,6 @@ function liveActionLabel(action: LiveAction): string {
 }
 
 function LiveActionChip({ action }: { action: LiveAction }) {
-  const { t } = useTranslation();
   const { icon: Icon, tone } = liveActionStyle(action.kind);
   return (
     <div className="flex gap-3">
@@ -117,7 +118,7 @@ function LiveActionChip({ action }: { action: LiveAction }) {
       <div className="flex-1 min-w-0">
         <div className={["inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs", tone].join(" ")}>
           <Icon className="h-3 w-3 shrink-0" />
-          <span className="shrink-0 font-medium uppercase tracking-wide text-[10px]">{t("agent.runtime")}</span>
+          <span className="shrink-0 font-medium uppercase tracking-wide text-[10px]">RUNTIME</span>
           <span className="shrink-0 font-medium">{liveActionLabel(action)}</span>
           {action.intent_normalized && (
             <span className="truncate text-foreground/80">· {action.intent_normalized}</span>
@@ -309,11 +310,11 @@ export function Agent() {
   useEffect(() => {
     onStatusChange((s) => {
       act().setSseStatus(s);
-      if (s === "reconnecting" && prevSseStatusRef.current === "connected") toast.warning(t("agent.connectionLost"));
-      else if (s === "connected" && prevSseStatusRef.current === "reconnecting") toast.success(t("agent.connectionRestored"));
+      if (s === "reconnecting" && prevSseStatusRef.current === "connected") toast.warning(t('agent.connectionLostReconnect'));
+      else if (s === "connected" && prevSseStatusRef.current === "reconnecting") toast.success(t('agent.connectionRestored'));
       prevSseStatusRef.current = s;
     });
-  }, [onStatusChange, t]);
+  }, [onStatusChange]);
 
   const doDisconnect = useCallback(() => {
     disconnect();
@@ -339,7 +340,7 @@ export function Agent() {
         setGoalDetailsOpen(false);
         setGoalEditActive(false);
       } else {
-        toast.error(error instanceof Error ? error.message : "Failed to load goal.");
+        toast.error(error instanceof Error ? error.message : t('agent.failedToLoadGoal'));
       }
     }
   }, []);
@@ -406,6 +407,37 @@ export function Agent() {
     }
   }, [forceScrollToBottom]);
 
+  const refreshSessionMessages = useCallback(async (sid: string) => {
+    const gen = genRef.current + 1;
+    genRef.current = gen;
+    await loadSessionMessages(sid, gen);
+  }, [loadSessionMessages]);
+
+  const syncCompletedAttempt = useCallback(async (sid: string, attemptId?: string) => {
+    if (!attemptId) return false;
+    for (let i = 0; i < 3; i += 1) {
+      try {
+        const storedMessages = await api.getSessionMessages(sid);
+        const completed = storedMessages.some(
+          (message) => message.role === "assistant" && message.linked_attempt_id === attemptId,
+        );
+        if (completed) {
+          if (act().sessionId !== sid) return true;
+          setReasoningActive(false);
+          act().clearStreaming();
+          act().setStatus("idle");
+          useAgentStore.setState({ toolCalls: [] });
+          await refreshSessionMessages(sid);
+          return true;
+        }
+      } catch {
+        return false;
+      }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 800));
+    }
+    return false;
+  }, [refreshSessionMessages]);
+
   const setupSSE = useCallback((sid: string) => {
     if (sseSessionRef.current === sid) return;
     disconnect();
@@ -414,7 +446,6 @@ export function Agent() {
     const touch = () => { lastEventRef.current = Date.now(); };
 
     connect(api.sseUrl(sid, { replay: "active" }), {
-      "*": () => { touch(); },
       text_delta: (d) => {
         touch();
         setReasoningActive(false);
@@ -669,7 +700,7 @@ export function Agent() {
         // the RunnerStatus panel re-polls so its per-broker rows show "halted".
         setLiveHalted(halted);
         setLiveStatusRefresh((n) => n + 1);
-        toast.warning(t("agent.connectorHaltedDetailed"));
+        toast.warning(t('agent.connectorHalted'));
       },
 
       "live.resumed": (d) => {
@@ -679,7 +710,7 @@ export function Agent() {
         void d;
         setLiveHalted(null);
         setLiveStatusRefresh((n) => n + 1);
-        toast.success(t("agent.connectorResumed"));
+        toast.success(t('agent.connectionRestored'));
       },
 
       "live.action": (d) => {
@@ -699,7 +730,7 @@ export function Agent() {
       heartbeat: () => {},
       reconnect: (d) => { act().setSseStatus("reconnecting", Number(d.attempt ?? 0)); },
     });
-  }, [connect, disconnect, loadGoalSnapshot, scrollToBottom, t]);
+  }, [connect, disconnect, loadGoalSnapshot, scrollToBottom]);
 
   useEffect(() => {
     const { sessionId: curSid, messages: curMsgs, cacheSession, reset, getCachedSession, switchSession } = act();
@@ -723,6 +754,21 @@ export function Agent() {
       } else {
         loadSessionMessages(urlSessionId, gen);
       }
+      setupSSE(urlSessionId);
+    } else if (urlSessionId && urlSessionId === curSid && sseSessionRef.current !== urlSessionId) {
+      // #229: returning to the SAME session after the page was unmounted (user
+      // navigated away and back). The store kept our messages, but the unmount
+      // cleanup tore down the SSE stream, so a running attempt stopped updating
+      // and the UI looked frozen until the safety timeout fired. Re-hydrate like
+      // a reload: reset the transient streaming view first (so replay=active
+      // rebuilds the in-flight turn from the backend ring buffer instead of
+      // duplicating deltas onto the preserved text), refresh committed history
+      // (covers an attempt that finished while we were away), then re-subscribe.
+      const gen = genRef.current + 1;
+      genRef.current = gen;
+      const seed = curMsgs.length > 0 ? curMsgs : getCachedSession(urlSessionId);
+      switchSession(urlSessionId, seed);
+      loadSessionMessages(urlSessionId, gen);
       setupSSE(urlSessionId);
     } else if (!urlSessionId && curSid) {
       genRef.current += 1;
@@ -803,11 +849,11 @@ export function Agent() {
       if (lastEventRef.current && Date.now() - lastEventRef.current > sseTimeoutMsRef.current && act().status === "streaming") {
         setReasoningActive(false);
         act().setStatus("idle");
-        toast.warning(t("agent.executionTimedOut"));
+        toast.warning(t('agent.executionTimedOut'));
       }
     }, 10_000);
     return () => clearInterval(timer);
-  }, [status, t]);
+  }, [status]);
 
   const runPrompt = async (prompt: string) => {
     if (!prompt.trim() || status === "streaming") return;
@@ -821,16 +867,17 @@ export function Agent() {
         setGoalSnapshot(snapshot);
         setGoalComposerActive(false);
         setGoalDetailsOpen(true);
-        toast.success(t("agent.researchGoalAttached"));
+        toast.success(t('agent.researchGoalAttached'));
         const kickoff = goalKickoffPrompt(prompt);
         act().addMessage({ id: "", type: "user", content: kickoff, timestamp: Date.now() });
         act().setStatus("streaming");
         forceScrollToBottom();
         setupSSE(sid);
-        await api.sendMessage(sid, kickoff);
+        const sent = await api.sendMessage(sid, kickoff);
+        void syncCompletedAttempt(sid, sent.attempt_id);
       } catch (error) {
         act().setStatus("idle");
-        toast.error(error instanceof Error ? error.message : t("agent.startGoalFailed"));
+        toast.error(error instanceof Error ? error.message : t('agent.failedToStartGoal'));
       }
       return;
     }
@@ -862,10 +909,11 @@ export function Agent() {
         setSearchParams({ session: sid }, { replace: true });
       }
       setupSSE(sid);
-      await api.sendMessage(sid, finalPrompt);
+      const sent = await api.sendMessage(sid, finalPrompt);
+      void syncCompletedAttempt(sid, sent.attempt_id);
     } catch (error) {
       act().setStatus("error");
-      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t("agent.sendFailed");
+      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t('agent.failedToSend');
       toast.error(message);
       act().addMessage({ id: "", type: "error", content: message, timestamp: Date.now() });
     }
@@ -896,9 +944,9 @@ export function Agent() {
       act().setStatus("idle");
       act().clearStreaming();
       useAgentStore.setState({ toolCalls: [] });
-      toast.info(t("agent.cancelSent"));
+      toast.info(t('agent.cancelRequestSent'));
     } catch {
-      toast.error(t("agent.cancelFailed"));
+      toast.error(t('agent.cancelFailed'));
     }
   };
 
@@ -916,13 +964,13 @@ export function Agent() {
       // optimistically and re-poll the runtime panel so the runner shows stopped.
       setLiveHalted((cur) => cur ?? { broker: null, by: "frontend", tripped_at: new Date().toISOString() });
       setLiveStatusRefresh((n) => n + 1);
-      toast.success(t("agent.connectorHalted"));
+      toast.success(t('agent.connectorHalted'));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("agent.haltConnectorFailed"));
+      toast.error(error instanceof Error ? error.message : t('agent.failedToHaltConnector'));
     } finally {
       setHalting(false);
     }
-  }, [sessionId, halting, t]);
+  }, [sessionId, halting]);
 
   const handleCancelGoal = useCallback(async () => {
     if (!sessionId || !goalSnapshot) return;
@@ -935,11 +983,11 @@ export function Agent() {
       });
       setGoalSnapshot(null);
       setGoalDetailsOpen(false);
-      toast.success(t("agent.researchGoalCancelled"));
+      toast.success(t('agent.researchGoalCancelled'));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("agent.cancelGoalFailed"));
+      toast.error(error instanceof Error ? error.message : t('agent.failedToCancelGoal'));
     }
-  }, [goalSnapshot, sessionId, t]);
+  }, [goalSnapshot, sessionId]);
 
   const handleStartGoalEdit = useCallback(() => {
     if (!goalSnapshot) return;
@@ -958,11 +1006,11 @@ export function Agent() {
       });
       setGoalSnapshot(response.snapshot);
       setGoalEditActive(false);
-      toast.success(t("agent.researchGoalUpdated"));
+      toast.success(t('agent.researchGoalUpdated'));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("agent.updateGoalFailed"));
+      toast.error(error instanceof Error ? error.message : t('agent.failedToUpdateGoal'));
     }
-  }, [goalEditValue, goalSnapshot, sessionId, t]);
+  }, [goalEditValue, goalSnapshot, sessionId]);
 
   const handleContinueGoal = useCallback(async () => {
     if (!sessionId || !goalSnapshot || status === "streaming") return;
@@ -973,14 +1021,15 @@ export function Agent() {
     inputRef.current?.focus();
     try {
       setupSSE(sessionId);
-      await api.sendMessage(sessionId, prompt);
+      const sent = await api.sendMessage(sessionId, prompt);
+      void syncCompletedAttempt(sessionId, sent.attempt_id);
     } catch (error) {
       act().setStatus("error");
-      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t("agent.continueGoalFailed");
+      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t('agent.failedToContinue');
       toast.error(message);
       act().addMessage({ id: "", type: "error", content: message, timestamp: Date.now() });
     }
-  }, [forceScrollToBottom, goalSnapshot, sessionId, setupSSE, status, t]);
+  }, [forceScrollToBottom, goalSnapshot, sessionId, setupSSE, status, syncCompletedAttempt]);
 
   const handleRetry = useCallback((errorMsg: AgentMessage) => {
     if (status === "streaming") return;
@@ -1038,11 +1087,11 @@ export function Agent() {
     ];
     const lowered = file.name.toLowerCase();
     if (blockedExts.some((ext) => lowered.endsWith(ext))) {
-      toast.error(t("agent.uploadBlocked"));
+      toast.error(t('agent.executablesNotAllowed'));
       return;
     }
     if (file.size > 50 * 1024 * 1024) {
-      toast.error(t("agent.uploadTooLarge"));
+      toast.error(t('agent.fileSizeExceeds'));
       return;
     }
     setUploading(true);
@@ -1050,13 +1099,13 @@ export function Agent() {
     try {
       const result = await api.uploadFile(file);
       setAttachment({ filename: result.filename, filePath: result.file_path });
-      toast.success(`${t("agent.uploadSuccess")}: ${result.filename}`);
+      toast.success(t('agent.uploaded', { filename: result.filename }));
     } catch (err) {
-      toast.error(`${t("agent.uploadFailed")}: ${err instanceof Error ? err.message : t("agent.unknownError")}`);
+      toast.error(t('agent.uploadFailed', { error: err instanceof Error ? err.message : 'Unknown error' }));
     } finally {
       setUploading(false);
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -1174,7 +1223,7 @@ export function Agent() {
               <AgentAvatar />
               <div className="flex-1 min-w-0 flex items-center gap-2 text-xs text-muted-foreground pt-1">
                 <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
-                <span>{t("agent.working")}</span>
+                <span>{t('agent.agentWorking')}</span>
               </div>
             </div>
           )}
@@ -1187,12 +1236,12 @@ export function Agent() {
                 {reasoningActive && !streamingText && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
-                    <span>Reasoning…</span>
+                    <span>{t('agent.reasoning')}</span>
                   </div>
                 )}
                 {streamingText && (
-                  <div className="relative">
-                    <MarkdownContent>{streamingText}</MarkdownContent>
+                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">
+                    {streamingText}
                     <span className="inline-block w-0.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
                   </div>
                 )}
@@ -1209,7 +1258,7 @@ export function Agent() {
               <div className="h-0.5 flex-1 rounded-full bg-primary/20 overflow-hidden">
                 <div className="h-full w-1/3 bg-primary rounded-full animate-[pulse-slide_2s_ease-in-out_infinite]" />
               </div>
-              <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">{t("agent.running")}</span>
+              <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">{t('agent.running')}</span>
             </div>
           )}
 
@@ -1221,7 +1270,7 @@ export function Agent() {
             onClick={forceScrollToBottom}
             className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:opacity-90 transition-opacity z-10"
           >
-            <ArrowDown className="h-3 w-3" /> {t("agent.newMessages")}
+            <ArrowDown className="h-3 w-3" /> {t('agent.newMessages')}
           </button>
         )}
         <ConversationTimeline messages={messages} containerRef={listRef} />
@@ -1245,7 +1294,7 @@ export function Agent() {
             <div className="flex items-center gap-1">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
                 <Target className="h-3 w-3" />
-                {t("agent.newResearchGoal")}
+                New Research Goal
                 <button type="button" onClick={() => setGoalComposerActive(false)} className="hover:text-destructive transition-colors">
                   <X className="h-3 w-3" />
                 </button>
@@ -1259,11 +1308,11 @@ export function Agent() {
                 onClick={() => setGoalDetailsOpen((open) => !open)}
                 className="inline-flex max-w-full items-center gap-1.5 justify-self-start rounded-lg bg-primary/10 px-2.5 py-1 text-left text-xs font-medium text-primary transition-colors hover:bg-primary/15"
                 title={goalSnapshot.goal.objective}
-                aria-label={t("agent.activeGoal")}
+                aria-label="Active research goal"
                 aria-expanded={goalDetailsOpen}
               >
                 <Target className="h-3 w-3 shrink-0" />
-                <span className="shrink-0">{t("agent.goal")}</span>
+                <span className="shrink-0">{t('agent.goal')}</span>
                 <span className="truncate text-muted-foreground">
                   {goalSnapshot.goal.ui_summary || goalSnapshot.goal.objective}
                 </span>
@@ -1274,7 +1323,7 @@ export function Agent() {
                 )}
                 {goalProgress.evidenceTotal > 0 && (
                   <span className="shrink-0 rounded bg-background px-1 font-mono text-[10px] text-primary" title="Evidence collected toward this research goal">
-                    {goalProgress.evidenceTotal} {t("agent.evidence")}
+                    {goalProgress.evidenceTotal} evidence
                   </span>
                 )}
                 <ChevronDown
@@ -1302,7 +1351,7 @@ export function Agent() {
                           className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
                         >
                           <X className="h-3 w-3" />
-                          {t("agent.cancel")}
+                          Cancel
                         </button>
                         <button
                           type="button"
@@ -1311,7 +1360,7 @@ export function Agent() {
                           className="inline-flex items-center gap-1 rounded-lg bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground transition-opacity disabled:opacity-40"
                         >
                           <Check className="h-3 w-3" />
-                          {t("agent.save")}
+                          Save
                         </button>
                       </div>
                     </div>
@@ -1323,7 +1372,7 @@ export function Agent() {
                   <div className="grid grid-cols-2 gap-2">
                     <div className="rounded-lg border bg-muted/20 p-2.5">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        {t("agent.criteria")}
+                        Criteria
                       </div>
                       <div className="mt-1 font-mono text-base font-semibold text-foreground">
                         {goalProgress.label || "0/0"}
@@ -1331,7 +1380,7 @@ export function Agent() {
                     </div>
                     <div className="rounded-lg border bg-muted/20 p-2.5">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        {t("agent.evidence")}
+                        Evidence
                       </div>
                       <div className="mt-1 font-mono text-base font-semibold text-foreground">
                         {goalProgress.evidenceTotal}
@@ -1368,7 +1417,7 @@ export function Agent() {
                   {goalSnapshot.evidence.length > 0 && (
                     <div className="grid gap-1.5 border-t pt-2">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        {t("agent.recentEvidence")}
+                        Recent Evidence
                       </div>
                       {latestGoalEvidence(goalSnapshot).map((item) => (
                         <div key={item.evidence_id} className="rounded-lg bg-muted/20 px-2 py-1.5">
@@ -1391,7 +1440,7 @@ export function Agent() {
                       className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
                     >
                       <Play className="h-3 w-3" />
-                      {t("agent.continue")}
+                      Continue
                     </button>
                     <button
                       type="button"
@@ -1400,7 +1449,7 @@ export function Agent() {
                       className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
                     >
                       <Pencil className="h-3 w-3" />
-                      {t("agent.edit")}
+                      Edit
                     </button>
                     <button
                       type="button"
@@ -1408,7 +1457,7 @@ export function Agent() {
                       className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
                     >
                       <X className="h-3 w-3" />
-                      {t("agent.cancelGoal")}
+                      Cancel Goal
                     </button>
                   </div>
                 </div>
@@ -1439,7 +1488,7 @@ export function Agent() {
           {uploading && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {t("agent.uploading")}
+              Uploading...
             </div>
           )}
           {/* Persistent kill switch — distinct from the per-turn Stop button
@@ -1449,7 +1498,7 @@ export function Agent() {
               {liveIsHalted ? (
                 <span className="inline-flex items-center gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
                   <OctagonX className="h-3 w-3" />
-                  {t("agent.connectorHalted")}
+                  Connector runtime halted
                 </span>
               ) : (
                 <button
@@ -1457,10 +1506,10 @@ export function Agent() {
                   onClick={handleHaltLive}
                   disabled={halting}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
-                  title={t("agent.connectorHaltTitle")}
+                  title="Instantly halt connector runtime activity"
                 >
                   {halting ? <Loader2 className="h-3 w-3 animate-spin" /> : <OctagonX className="h-3 w-3" />}
-                  {t("agent.haltConnector")}
+                  Halt connector runtime
                 </button>
               )}
             </div>
@@ -1473,7 +1522,7 @@ export function Agent() {
                 onClick={() => setShowUploadMenu(prev => !prev)}
                 disabled={status === "streaming" || uploading}
                 className="w-9 h-9 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 shrink-0"
-                title={t("agent.moreOptions")}
+                title="More options"
               >
                 <Plus className="h-4 w-4" />
               </button>
@@ -1485,7 +1534,7 @@ export function Agent() {
                     className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
                     <Paperclip className="h-4 w-4" />
-                    {t("agent.uploadPdf")}
+                    Upload PDF document
                   </button>
                   <div className="border-t my-1" />
                   <button
@@ -1499,7 +1548,7 @@ export function Agent() {
                     className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
                     <Target className="h-4 w-4" />
-                    {t("agent.researchGoal")}
+                    Research Goal
                   </button>
                   <button
                     type="button"
@@ -1512,7 +1561,7 @@ export function Agent() {
                     className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
                     <Users className="h-4 w-4" />
-                    {t("agent.agentSwarm")}
+                    Agent Swarm
                   </button>
                   <div className="border-t my-1" />
                   <button
@@ -1524,7 +1573,7 @@ export function Agent() {
                     className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
                     <Landmark className="h-4 w-4" />
-                    {t("agent.checkConnector")}
+                    Check Trading Connector
                   </button>
                   <button
                     type="button"
@@ -1535,7 +1584,7 @@ export function Agent() {
                     className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
                     <Landmark className="h-4 w-4" />
-                    {t("agent.analyzeConnector")}
+                    Analyze Connector Portfolio
                   </button>
                 </div>
               )}
@@ -1581,8 +1630,8 @@ export function Agent() {
               }}
               placeholder={
                 goalComposerActive
-                  ? t("agent.goalPlaceholder")
-                  : t("agent.promptPlaceholder")
+                  ? "Describe the research goal to attach to this session"
+                  : "e.g. Create a dual MA crossover strategy for 000001.SZ, backtest 2024"
               }
               className="flex-1 px-4 py-2.5 rounded-xl border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow resize-none max-h-32 overflow-y-auto"
               disabled={status === "streaming"}
@@ -1592,7 +1641,7 @@ export function Agent() {
                 type="button"
                 onClick={handleExport}
                 className="px-3 py-2.5 rounded-xl border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                title={t("agent.exportChat")}
+                title={t('agent.exportChat')}
               >
                 <Download className="h-4 w-4" />
               </button>
@@ -1602,7 +1651,7 @@ export function Agent() {
                 type="button"
                 onClick={handleCancel}
                 className="px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground text-sm font-medium hover:opacity-90 transition-opacity"
-                title={t("agent.stopGeneration")}
+                title={t('agent.stopGeneration')}
               >
                 <Square className="h-4 w-4" />
               </button>

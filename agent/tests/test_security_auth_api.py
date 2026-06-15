@@ -150,6 +150,109 @@ def test_loopback_bypasses_auth_even_when_api_key_configured(
     assert remote_bearer.status_code == 200
 
 
+def test_loopback_rejects_rebound_host_before_auth_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loopback peer is not enough when Host is attacker-controlled."""
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+
+    response = _local_client().get(
+        "/runs",
+        headers={"Host": "attacker.example:8899", "Origin": "http://attacker.example:8899"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Untrusted local API host"
+
+
+def test_remote_untrusted_host_still_uses_bearer_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Host gate only narrows loopback trust; remote clients still use API_AUTH_KEY."""
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+
+    response = _remote_client().get(
+        "/runs",
+        headers={"Host": "attacker.example:8899", "Origin": "http://attacker.example:8899"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_rebound_host_cannot_start_live_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DNS-rebound loopback JSON requests must not reach live-runner control."""
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+    monkeypatch.setattr(api_server, "_active_mandate_state", lambda broker: SimpleNamespace(expired=False))
+
+    reached = {"factory": False}
+
+    class DummyRunner:
+        async def run_loop(self):
+            return None
+
+    def build_runner(broker: str) -> DummyRunner:
+        reached["factory"] = True
+        return DummyRunner()
+
+    monkeypatch.setattr(api_server, "_runner_factory", build_runner)
+    monkeypatch.setattr("src.trading.service.broker_supports_live_runner", lambda broker: True)
+    monkeypatch.setattr("src.live.halt.halt_flag_set", lambda broker=None: False)
+    api_server._runner_tasks.clear()
+
+    response = _local_client().post(
+        "/live/runner/start",
+        headers={
+            "Host": "attacker.example:8899",
+            "Origin": "http://attacker.example:8899",
+            "Content-Type": "application/json",
+        },
+        json={"broker": "robinhood", "session_id": "proof-session"},
+    )
+
+    assert response.status_code == 403
+    assert reached["factory"] is False
+    assert "robinhood" not in api_server._runner_tasks
+
+
+def test_allowed_loopback_host_can_start_live_runner_dev_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allowed local hosts preserve the loopback dev-mode runner control path."""
+    monkeypatch.setattr(api_server, "_active_mandate_state", lambda broker: SimpleNamespace(expired=False))
+
+    reached = {"factory": False}
+
+    class DummyRunner:
+        async def run_loop(self):
+            return None
+
+    def build_runner(broker: str) -> DummyRunner:
+        reached["factory"] = True
+        return DummyRunner()
+
+    monkeypatch.setattr(api_server, "_runner_factory", build_runner)
+    monkeypatch.setattr("src.trading.service.broker_supports_live_runner", lambda broker: True)
+    monkeypatch.setattr("src.live.halt.halt_flag_set", lambda broker=None: False)
+    api_server._runner_tasks.clear()
+
+    response = _local_client().post(
+        "/live/runner/start",
+        headers={"Host": "127.0.0.1:8899", "Content-Type": "application/json"},
+        json={"broker": "robinhood", "session_id": "proof-session"},
+    )
+
+    assert response.status_code == 200
+    assert reached["factory"] is True
+    task = api_server._runner_tasks.pop("robinhood", None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
 def test_configured_api_key_required_for_session_event_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,10 +275,10 @@ def test_session_event_stream_accepts_query_token_for_browser_eventsource(
     assert response.status_code in {404, 501}
 
 
-def test_shell_tools_allowed_for_loopback_api_request() -> None:
+def test_shell_tools_disabled_for_loopback_api_request_by_default() -> None:
     request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
 
-    assert api_server._shell_tools_enabled_for_request(request)
+    assert not api_server._shell_tools_enabled_for_request(request)
 
 
 def test_shell_tools_disabled_for_remote_api_request_by_default() -> None:
@@ -184,13 +287,80 @@ def test_shell_tools_disabled_for_remote_api_request_by_default() -> None:
     assert not api_server._shell_tools_enabled_for_request(request)
 
 
-def test_shell_tools_remote_api_request_accepts_explicit_opt_in(
+def test_shell_tools_api_request_accepts_explicit_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request = SimpleNamespace(client=SimpleNamespace(host="203.0.113.10"))
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
     monkeypatch.setenv("VIBE_TRADING_ENABLE_SHELL_TOOLS", "1")
 
     assert api_server._shell_tools_enabled_for_request(request)
+
+
+def test_dns_rebound_swarm_run_does_not_enable_shell_tools_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeRuntime:
+        def start_run(self, preset_name: str, user_vars: dict, include_shell_tools: bool = False):
+            captured["preset_name"] = preset_name
+            captured["user_vars"] = user_vars
+            captured["include_shell_tools"] = include_shell_tools
+            return SimpleNamespace(
+                id="swarm-test-no-shell",
+                status=SimpleNamespace(value="running"),
+                preset_name=preset_name,
+            )
+
+    monkeypatch.setattr(api_server, "_get_swarm_runtime", lambda: FakeRuntime())
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+
+    response = _local_client().post(
+        "/swarm/runs",
+        headers={
+            "Host": "attacker.example:8899",
+            "Origin": "http://attacker.example:8899",
+        },
+        json={
+            "preset_name": "technical_analysis_panel",
+            "user_vars": {"target": "NVDA", "timeframe": "1d"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["include_shell_tools"] is False
+
+
+def test_dns_rebound_session_message_does_not_enable_shell_tools_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeSessionService:
+        async def send_message(self, session_id: str, content: str, include_shell_tools: bool = False):
+            captured["session_id"] = session_id
+            captured["content"] = content
+            captured["include_shell_tools"] = include_shell_tools
+            return {"message_id": "msg-test", "attempt_id": "attempt-test"}
+
+    monkeypatch.setattr(api_server, "_get_session_service", lambda: FakeSessionService())
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+
+    response = _local_client().post(
+        "/sessions/abcdef012345/messages",
+        headers={
+            "Host": "attacker.example:8899",
+            "Origin": "http://attacker.example:8899",
+        },
+        json={"content": "SESSION_DNS_REBIND_PROOF_PAYLOAD"},
+    )
+
+    assert response.status_code == 200
+    assert captured["session_id"] == "abcdef012345"
+    assert captured["content"] == "SESSION_DNS_REBIND_PROOF_PAYLOAD"
+    assert captured["include_shell_tools"] is False
 
 
 def test_default_cors_origins_are_loopback_only() -> None:
@@ -213,6 +383,57 @@ def test_cors_origins_accept_explicit_remote_origins() -> None:
     origins = api_server._parse_cors_origins(" https://app.example.com,https://admin.example.com ")
 
     assert origins == ["https://app.example.com", "https://admin.example.com"]
+
+
+def test_loopback_shutdown_requires_bearer_when_api_key_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Loopback alone must not authorize the browser-reachable shutdown action."""
+    called: list[bool] = []
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+    monkeypatch.setattr(api_server, "_terminate_current_process", lambda: called.append(True))
+
+    response = _local_client().post("/system/shutdown")
+
+    assert response.status_code == 401
+    assert called == []
+
+
+def test_loopback_shutdown_rejects_cross_site_browser_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CORS is not enough; unsafe cross-site browser POSTs must be rejected."""
+    called: list[bool] = []
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+    monkeypatch.setattr(api_server, "_terminate_current_process", lambda: called.append(True))
+
+    response = _local_client().post(
+        "/system/shutdown",
+        headers={"Origin": "https://attacker.example"},
+    )
+
+    assert response.status_code == 403
+    assert called == []
+
+
+def test_loopback_shutdown_accepts_valid_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: list[bool] = []
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+    monkeypatch.setattr(api_server, "_terminate_current_process", lambda: called.append(True))
+
+    response = _local_client().post(
+        "/system/shutdown",
+        headers={"Authorization": "Bearer secret", "Origin": "http://127.0.0.1:8899"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "shutting-down"
+    assert called == [True]
 
 
 # ============================================================================
