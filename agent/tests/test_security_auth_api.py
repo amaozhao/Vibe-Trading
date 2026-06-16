@@ -296,7 +296,7 @@ def test_shell_tools_api_request_accepts_explicit_opt_in(
     assert api_server._shell_tools_enabled_for_request(request)
 
 
-def test_dns_rebound_swarm_run_does_not_enable_shell_tools_by_default(
+def test_dns_rebound_swarm_run_rejected_before_shell_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -328,11 +328,12 @@ def test_dns_rebound_swarm_run_does_not_enable_shell_tools_by_default(
         },
     )
 
-    assert response.status_code == 200
-    assert captured["include_shell_tools"] is False
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Untrusted local API host"
+    assert captured == {}
 
 
-def test_dns_rebound_session_message_does_not_enable_shell_tools_by_default(
+def test_dns_rebound_session_message_rejected_before_shell_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -357,10 +358,9 @@ def test_dns_rebound_session_message_does_not_enable_shell_tools_by_default(
         json={"content": "SESSION_DNS_REBIND_PROOF_PAYLOAD"},
     )
 
-    assert response.status_code == 200
-    assert captured["session_id"] == "abcdef012345"
-    assert captured["content"] == "SESSION_DNS_REBIND_PROOF_PAYLOAD"
-    assert captured["include_shell_tools"] is False
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Untrusted local API host"
+    assert captured == {}
 
 
 def test_default_cors_origins_are_loopback_only() -> None:
