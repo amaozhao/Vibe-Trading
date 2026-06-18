@@ -381,7 +381,7 @@ def test_shell_tools_api_request_accepts_explicit_opt_in(
     assert api_server._shell_tools_enabled_for_request(request)
 
 
-def test_dns_rebound_swarm_run_does_not_enable_shell_tools_by_default(
+def test_dns_rebound_swarm_run_rejected_before_shell_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -417,10 +417,11 @@ def test_dns_rebound_swarm_run_does_not_enable_shell_tools_by_default(
     # before /swarm/runs runs, so the request never reaches the point where shell
     # tools would be granted — the swarm runtime is never invoked.
     assert response.status_code == 403
-    assert "include_shell_tools" not in captured
+    assert response.json()["detail"] == "Untrusted local API host"
+    assert captured == {}
 
 
-def test_dns_rebound_session_message_does_not_enable_shell_tools_by_default(
+def test_dns_rebound_session_message_rejected_before_shell_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -449,7 +450,8 @@ def test_dns_rebound_session_message_does_not_enable_shell_tools_by_default(
     # before /sessions/{id}/messages runs, so the session service is never
     # invoked and shell tools can never be granted via a DNS-rebound request.
     assert response.status_code == 403
-    assert "include_shell_tools" not in captured
+    assert response.json()["detail"] == "Untrusted local API host"
+    assert captured == {}
 
 
 def test_default_cors_origins_are_loopback_only() -> None:
