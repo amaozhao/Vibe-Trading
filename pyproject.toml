@@ -1,6 +1,6 @@
 [project]
 name = "vibe-trading-ai"
-version = "0.1.9"
+version = "0.1.10"
 description = "Natural-language finance research AI agent with backtesting"
 requires-python = ">=3.11"
 license = "MIT"
@@ -81,6 +81,7 @@ include = ["src*", "backtest*", "cli*"]
     "skills/**/*.md",
     "skills/**/*.yaml",
     "skills/**/*.json",
+    "skills/**/*.py",
     "providers/*.json",
     "swarm/presets/*.yaml",
     "shadow_account/templates/*.j2",
