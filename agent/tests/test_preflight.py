@@ -28,7 +28,6 @@ def test_akshare_check_skips_when_missing(monkeypatch) -> None:
     assert result.status == "skipped"
     assert result.message == "package not installed"
 
-
 def test_minimax_token_plan_preflight_uses_token_plan_base_url(monkeypatch) -> None:
     """Token Plan is not OpenAI-compatible; preflight must not require
     OPENAI_BASE_URL after provider env sync clears it."""
@@ -47,3 +46,26 @@ def test_minimax_token_plan_preflight_uses_token_plan_base_url(monkeypatch) -> N
 
     assert result.status == "ready"
     assert "MiniMax-M3 via https://api.minimaxi.com/anthropic" == result.message
+
+
+def test_content_filter_threshold_check(monkeypatch) -> None:
+    """Content Filter Threshold row must appear in preflight output."""
+    monkeypatch.setenv("CONTENT_FILTER_WARNING_THRESHOLD", "0.10")
+
+    result = preflight._check_content_filter_threshold()
+
+    assert result.name == "Content Filter Threshold"
+    assert result.status == "ready"
+    assert "10%" in result.message
+    assert "CONTENT_FILTER_WARNING_THRESHOLD" in result.message
+
+
+def test_content_filter_threshold_default(monkeypatch) -> None:
+    """Default threshold is 5% when env var is unset."""
+    monkeypatch.delenv("CONTENT_FILTER_WARNING_THRESHOLD", raising=False)
+
+    result = preflight._check_content_filter_threshold()
+
+    assert result.name == "Content Filter Threshold"
+    assert result.status == "ready"
+    assert "5%" in result.message
