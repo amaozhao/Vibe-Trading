@@ -14,10 +14,11 @@ Tool execution:
 from __future__ import annotations
 
 import concurrent.futures
+import copy
 import json
 import logging
-import os
 import queue
+import sys
 import threading
 import time as _time
 from datetime import datetime, timezone
@@ -42,40 +43,78 @@ from src.providers.content_filter import (
     MAX_CONSECUTIVE_CONTENT_FILTER_SKIPS,
     compute_content_filter_warnings,
 )
+from src.config.accessor import get_env_config
 from src.tools.background_tools import get_background_manager
 from src.tools.redaction import redact_payload
 
 RUNS_DIR = Path(__file__).resolve().parents[2] / "runs"
 SESSIONS_DIR = Path(__file__).resolve().parents[2] / "sessions"
-TOKEN_THRESHOLD = int(os.getenv("TOKEN_THRESHOLD", "40000"))
 KEEP_RECENT = 3
 TOOL_RESULT_LIMIT = 10_000
-HEARTBEAT_INTERVAL_S = float(os.getenv("VT_HEARTBEAT_INTERVAL_S", "3.0"))
-REASONING_DELTA_MIN_INTERVAL_S = float(os.getenv("VT_REASONING_DELTA_MIN_INTERVAL_S", "1.0"))
-STREAM_RETRY_DELAY_S = float(os.getenv("VT_STREAM_RETRY_DELAY_S", "1.0"))
-TOOL_TIMEOUT_SECONDS = float(os.getenv("VIBE_TRADING_TOOL_TIMEOUT_SECONDS", "1800"))
-GOAL_MAX_CONTINUATIONS = int(os.getenv("VIBE_TRADING_GOAL_MAX_CONTINUATIONS", "3"))
-LENGTH_CONTINUATION_PROMPT = (
-    "[SYSTEM] Continue the previous answer exactly from where it stopped. "
-    "Do not restart, do not summarize, and do not repeat already-written sections."
-)
 LLM_USAGE_ARTIFACT = "llm_usage.json"
 
-# Layer 1: microcompact only prunes old tool results once the transcript is
-# under real memory pressure. Below this it would clear tool history on every
-# iteration even on short runs, discarding results the model may still need to
-# reference (metrics, file contents, search hits).
-MICROCOMPACT_THRESHOLD = int(TOKEN_THRESHOLD * 0.5)
-
-# Layer 2: Context collapse thresholds
-COLLAPSE_THRESHOLD = int(TOKEN_THRESHOLD * 0.7)
 COLLAPSE_PRESERVE_RECENT = 6
 COLLAPSE_TEXT_MIN = 2400
 COLLAPSE_HEAD = 900
 COLLAPSE_TAIL = 500
 
-# Layer 3: Token-budget tail protection
 TAIL_TOKEN_BUDGET = 20_000
+
+
+def _override(name: str):
+    """Return a monkeypatched module-level override if present."""
+    mod = sys.modules.get(__name__)
+    if mod is not None and name in mod.__dict__:
+        return mod.__dict__[name]
+    return None
+
+
+def _token_threshold() -> int:
+    ov = _override("TOKEN_THRESHOLD")
+    if ov is not None:
+        return ov
+    from src.config.accessor import get_env_config
+    return get_env_config().agent_tuning.token_threshold
+
+
+def _heartbeat_interval_s() -> float:
+    ov = _override("HEARTBEAT_INTERVAL_S")
+    if ov is not None:
+        return ov
+    from src.config.accessor import get_env_config
+    return get_env_config().agent_tuning.vt_heartbeat_interval_s
+
+
+def _reasoning_delta_min_interval_s() -> float:
+    ov = _override("REASONING_DELTA_MIN_INTERVAL_S")
+    if ov is not None:
+        return ov
+    from src.config.accessor import get_env_config
+    return get_env_config().agent_tuning.vt_reasoning_delta_min_interval_s
+
+
+def _stream_retry_delay_s() -> float:
+    ov = _override("STREAM_RETRY_DELAY_S")
+    if ov is not None:
+        return ov
+    from src.config.accessor import get_env_config
+    return get_env_config().agent_tuning.vt_stream_retry_delay_s
+
+
+def _tool_timeout_seconds() -> float:
+    ov = _override("TOOL_TIMEOUT_SECONDS")
+    if ov is not None:
+        return ov
+    from src.config.accessor import get_env_config
+    return get_env_config().agent_tuning.vibe_trading_tool_timeout_seconds
+
+
+def _goal_max_continuations() -> int:
+    ov = _override("GOAL_MAX_CONTINUATIONS")
+    if ov is not None:
+        return ov
+    from src.config.accessor import get_env_config
+    return get_env_config().agent_tuning.vibe_trading_goal_max_continuations
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +153,10 @@ def _normalize_llm_usage(usage: Any) -> dict[str, int] | None:
 
 def _new_llm_usage_summary(llm: Any) -> dict[str, Any]:
     """Create the run-scoped provider usage accumulator."""
-    provider = os.getenv("LANGCHAIN_PROVIDER", "openai").strip() or "openai"
-    model = getattr(llm, "model_name", None) or os.getenv("LANGCHAIN_MODEL_NAME", "").strip()
+    from src.config.accessor import get_env_config
+    cfg = get_env_config()
+    provider = cfg.llm.langchain_provider.strip() or "openai"
+    model = getattr(llm, "model_name", None) or cfg.llm.langchain_model_name.strip()
     return {
         "provider": provider,
         "model": model,
@@ -294,35 +335,72 @@ def _fix_tool_pairs(messages: list) -> None:
         messages.insert(pos, stub)
 
 
-def _attach_tool_call_thought_signatures(message: dict[str, Any], tool_calls: list) -> None:
-    """Attach Gemini thought signatures to replayed assistant tool calls."""
+def _attach_tool_call_thought_signatures(message: dict[str, Any], tool_calls: list) -> dict[str, Any]:
+    """Attach Gemini thought signatures to assistant replay tool calls.
+
+    The replay message is later converted back into LangChain messages from a
+    plain dict history. Keep signatures in both the provider-neutral
+    ``extra_content.thought_signature`` slot and Gemini's OpenAI-compatible
+    ``extra_content.google.thought_signature`` slot so both local replay tests
+    and the Gemini request injector can recover the value.
+    """
     outbound_tool_calls = message.get("tool_calls")
     if not isinstance(outbound_tool_calls, list):
-        return
+        return message
 
-    signatures_by_id = {
-        tc.id: tc.thought_signature
-        for tc in tool_calls
-        if getattr(tc, "thought_signature", None)
-    }
-    for index, outbound_tool_call in enumerate(outbound_tool_calls):
-        if not isinstance(outbound_tool_call, dict):
-            continue
-        signature = signatures_by_id.get(outbound_tool_call.get("id"))
-        if not signature and index < len(tool_calls):
-            signature = getattr(tool_calls[index], "thought_signature", None)
+    signatures_by_id: dict[str, str] = {}
+    signatures_by_index: dict[int, str] = {}
+    for index, tc in enumerate(tool_calls):
+        extra_content = getattr(tc, "extra_content", None)
+        signature = None
+        if isinstance(extra_content, dict):
+            signature = extra_content.get("thought_signature")
+            google_extra = extra_content.get("google")
+            if not signature and isinstance(google_extra, dict):
+                signature = google_extra.get("thought_signature") or google_extra.get(
+                    "thoughtSignature"
+                )
+        signature = signature or getattr(tc, "thought_signature", None)
         if not signature:
             continue
+        tc_id = getattr(tc, "id", None)
+        if tc_id:
+            signatures_by_id[str(tc_id)] = signature
+        signatures_by_index[index] = signature
 
-        extra_content = outbound_tool_call.get("extra_content")
+    if not signatures_by_id and not signatures_by_index:
+        return message
+
+    def attach(raw_tool_call: Any, index: int) -> None:
+        if not isinstance(raw_tool_call, dict):
+            return
+        signature = signatures_by_id.get(str(raw_tool_call.get("id"))) or signatures_by_index.get(index)
+        if not signature:
+            return
+        extra_content = raw_tool_call.setdefault("extra_content", {})
         if not isinstance(extra_content, dict):
             extra_content = {}
-            outbound_tool_call["extra_content"] = extra_content
-        google = extra_content.get("google")
+            raw_tool_call["extra_content"] = extra_content
+        extra_content["thought_signature"] = signature
+        google = extra_content.setdefault("google", {})
         if not isinstance(google, dict):
             google = {}
             extra_content["google"] = google
         google["thought_signature"] = signature
+
+    for index, raw_tool_call in enumerate(outbound_tool_calls):
+        attach(raw_tool_call, index)
+
+    additional_kwargs = message.setdefault("additional_kwargs", {})
+    raw_tool_calls = additional_kwargs.setdefault(
+        "tool_calls",
+        copy.deepcopy(outbound_tool_calls),
+    )
+    if isinstance(raw_tool_calls, list):
+        for index, raw_tool_call in enumerate(raw_tool_calls):
+            attach(raw_tool_call, index)
+
+    return message
 
 
 # -- Structured summary templates ------------------------------------------
@@ -546,7 +624,6 @@ class AgentLoop:
 
         iteration = 0
         final_content = ""
-        final_content_parts: list[str] = []
         content_filter_count = 0
         consecutive_content_filter_count = 0
         content_filter_circuit_breaker = False
@@ -582,18 +659,19 @@ class AgentLoop:
                 # memory pressure, so short, low-pressure runs keep their full
                 # tool history available for the model to reference instead of
                 # having every result past the most recent few cleared.
-                if tokens > MICROCOMPACT_THRESHOLD:
+                if tokens > int(_token_threshold() * 0.5):
                     _microcompact(messages)
                     tokens = estimate_tokens(messages)
 
                 # Layer 2: context collapse (fold long text, zero API cost)
-                if tokens > COLLAPSE_THRESHOLD:
+                if tokens > int(_token_threshold() * 0.7):
                     _context_collapse(messages)
                     tokens = estimate_tokens(messages)
 
                 # Layer 3: auto_compact (token threshold exceeded)
-                if tokens > TOKEN_THRESHOLD:
-                    logger.info(f"Auto compact triggered: {tokens} tokens > {TOKEN_THRESHOLD}")
+                _tok_threshold = _token_threshold()
+                if tokens > _tok_threshold:
+                    logger.info(f"Auto compact triggered: {tokens} tokens > {_tok_threshold}")
                     self._auto_compact(messages, run_dir, trace, iteration=current_iter)
 
                 logger.info(f"ReAct iteration {iteration}/{self.max_iterations}")
@@ -635,7 +713,7 @@ class AgentLoop:
                     now = _time.monotonic()
                     if (
                         last_reasoning_emit is not None
-                        and now - last_reasoning_emit < REASONING_DELTA_MIN_INTERVAL_S
+                        and now - last_reasoning_emit < _reasoning_delta_min_interval_s()
                     ):
                         return
                     last_reasoning_emit = now
@@ -683,7 +761,7 @@ class AgentLoop:
                     thinking_chunks.clear()
                     reasoning_chars = 0
                     last_reasoning_emit = None
-                    _time.sleep(STREAM_RETRY_DELAY_S)
+                    _time.sleep(_stream_retry_delay_s())
                     response = self.llm.stream_chat(
                         messages,
                         tools=tool_defs,
@@ -775,41 +853,22 @@ class AgentLoop:
                 consecutive_content_filter_count = 0
 
                 if not response.has_tool_calls:
-                    response_content = response.content or ""
-                    if (
-                        getattr(response, "finish_reason", "stop") == "length"
-                        and response_content
-                        and not is_last_iteration
-                    ):
-                        final_content_parts.append(response_content)
-                        messages.append({"role": "assistant", "content": response_content})
-                        messages.append({"role": "user", "content": LENGTH_CONTINUATION_PROMPT})
-                        trace.write_text_entry(
-                            {"type": "answer_truncated", "iter": current_iter},
-                            field="content",
-                            value=response_content,
-                            offload_kind=f"answer-truncated-{current_iter}",
-                        )
-                        react_trace.append(
-                            {"type": "answer_truncated", "content": response_content[:500]}
-                        )
-                        continue
-
-                    final_content = "".join(final_content_parts) + response_content
+                    final_content = response.content or ""
                     if not final_content:
                         empty_model_response_iter = iteration
                         trace.write(
                             {
                                 "type": "empty_model_response",
                                 "iter": current_iter,
-                                "provider": os.getenv("LANGCHAIN_PROVIDER", "openai"),
-                                "model": getattr(self.llm, "model_name", None) or os.getenv("LANGCHAIN_MODEL_NAME", ""),
+                                "provider": get_env_config().llm.langchain_provider,
+                                "model": getattr(self.llm, "model_name", None) or get_env_config().llm.langchain_model_name,
                             }
                         )
                         break
                     should_continue_goal = False
                     continuation_snapshot = None
-                    if active_goal_id and session_id and GOAL_MAX_CONTINUATIONS > 0:
+                    _max_cont = _goal_max_continuations()
+                    if active_goal_id and session_id and _max_cont > 0:
                         try:
                             if goal_store is None:
                                 from src.goal import GoalStore
@@ -829,7 +888,7 @@ class AgentLoop:
                             goal_last_progress is not None
                             and current_progress <= goal_last_progress
                         )
-                        if goal_continuations >= GOAL_MAX_CONTINUATIONS or (
+                        if goal_continuations >= _max_cont or (
                             no_new_progress and goal_continuations > 0
                         ):
                             trace.write(
@@ -951,8 +1010,9 @@ class AgentLoop:
             state_store.mark_success(run_dir)
             final_status = "success"
         elif empty_model_response_iter is not None:
-            provider = os.getenv("LANGCHAIN_PROVIDER", "openai").strip().lower() or "openai"
-            model = getattr(self.llm, "model_name", None) or os.getenv("LANGCHAIN_MODEL_NAME", "").strip() or "(unset)"
+            _cfg = get_env_config()
+            provider = _cfg.llm.langchain_provider.strip().lower() or "openai"
+            model = getattr(self.llm, "model_name", None) or _cfg.llm.langchain_model_name.strip() or "(unset)"
             final_reason = (
                 "empty_model_response: "
                 f"provider={provider} model={model} iteration {empty_model_response_iter} "
@@ -1196,7 +1256,7 @@ class AgentLoop:
 
         Installs a thread-local progress emitter so the tool may call
         ``emit_progress()`` without taking a callback parameter, and runs a
-        background heartbeat timer that ticks every ``HEARTBEAT_INTERVAL_S``
+        background heartbeat timer that ticks every ``_heartbeat_interval_s()``
         seconds. Both event streams are forwarded through ``self._emit`` and
         therefore land in the same SSE bus and CLI dashboard as normal
         tool events.
@@ -1224,7 +1284,8 @@ class AgentLoop:
             self._emit("tool_heartbeat", payload)
 
         t0 = _time.perf_counter()
-        timeout = TOOL_TIMEOUT_SECONDS if TOOL_TIMEOUT_SECONDS > 0 else None
+        _tool_timeout = _tool_timeout_seconds()
+        timeout = _tool_timeout if _tool_timeout > 0 else None
         timeout_label = _format_timeout(timeout) if timeout is not None else ""
 
         def _elapsed_ms() -> int:
@@ -1243,7 +1304,7 @@ class AgentLoop:
             """
             return HeartbeatTimer(
                 tool_name=tool_name,
-                interval=HEARTBEAT_INTERVAL_S,
+                interval=_heartbeat_interval_s(),
                 emit=_on_heartbeat,
             )
 
@@ -1526,3 +1587,21 @@ class AgentLoop:
     def _update_memory(self, tool_name: str) -> None:
         """Update workspace memory counters after tool execution."""
         self.memory.increment(tool_name)
+
+
+_LEGACY_LAZY = {
+    "TOKEN_THRESHOLD": _token_threshold,
+    "MICROCOMPACT_THRESHOLD": lambda: int(_token_threshold() * 0.5),
+    "COLLAPSE_THRESHOLD": lambda: int(_token_threshold() * 0.7),
+    "HEARTBEAT_INTERVAL_S": _heartbeat_interval_s,
+    "REASONING_DELTA_MIN_INTERVAL_S": _reasoning_delta_min_interval_s,
+    "STREAM_RETRY_DELAY_S": _stream_retry_delay_s,
+    "TOOL_TIMEOUT_SECONDS": _tool_timeout_seconds,
+    "GOAL_MAX_CONTINUATIONS": _goal_max_continuations,
+}
+
+
+def __getattr__(name: str):
+    if name in _LEGACY_LAZY:
+        return _LEGACY_LAZY[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

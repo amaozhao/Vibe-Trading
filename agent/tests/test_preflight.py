@@ -5,7 +5,75 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import requests
+
 from src import preflight
+
+
+def _configure_llm_preflight(monkeypatch) -> None:
+    """Install a minimal OpenAI-compatible provider environment for preflight tests."""
+    import src.providers.llm as llm
+
+    monkeypatch.setenv("LANGCHAIN_PROVIDER", "openai")
+    monkeypatch.setenv("LANGCHAIN_MODEL_NAME", "gpt-test")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(llm, "_ensure_dotenv", lambda: None)
+    monkeypatch.setattr(llm, "_sync_provider_env", lambda: None)
+    monkeypatch.setattr(
+        llm,
+        "provider_diagnostics",
+        lambda: {
+            "base_url": "https://example.test/v1",
+            "timeout_seconds": 120,
+            "max_retries": 2,
+            "proxy": {},
+        },
+    )
+
+
+def test_llm_preflight_probe_does_not_follow_redirects(monkeypatch) -> None:
+    """A redirect response still proves the HTTPS provider base is reachable."""
+    _configure_llm_preflight(monkeypatch)
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_get(url: str, **kwargs: object) -> object:
+        calls.append((url, kwargs))
+        response = requests.Response()
+        response.status_code = 307
+        return response
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = preflight._check_llm_provider()
+
+    assert result.status == "ready"
+    assert calls == [
+        (
+            "https://example.test",
+            {
+                "timeout": 10,
+                "allow_redirects": False,
+            },
+        )
+    ]
+
+
+def test_llm_preflight_probe_reports_request_errors(monkeypatch) -> None:
+    """Request failures remain critical errors for the LLM provider check."""
+    _configure_llm_preflight(monkeypatch)
+
+    def fake_get(url: str, **kwargs: object) -> object:
+        del url, kwargs
+        raise requests.Timeout("timed out")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = preflight._check_llm_provider()
+
+    assert result.status == "error"
+    assert result.critical is True
+    assert "Timeout: timed out" in result.message
 
 
 def test_akshare_check_uses_spec_without_import(monkeypatch) -> None:
@@ -37,8 +105,8 @@ def test_minimax_token_plan_preflight_uses_token_plan_base_url(monkeypatch) -> N
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
 
-    def fake_get(url: str, timeout: int) -> SimpleNamespace:
-        return SimpleNamespace(url=url, timeout=timeout)
+    def fake_get(url: str, timeout: int, allow_redirects: bool = True) -> SimpleNamespace:
+        return SimpleNamespace(url=url, timeout=timeout, allow_redirects=allow_redirects)
 
     monkeypatch.setattr("requests.get", fake_get)
 

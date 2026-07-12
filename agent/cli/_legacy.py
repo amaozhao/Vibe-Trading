@@ -50,6 +50,7 @@ from rich.table import Table
 from rich.text import Text
 
 from cli.theme import get_console
+from src.config.accessor import get_env_config, reset_env_config
 
 console = get_console()
 AGENT_DIR = Path(__file__).resolve().parents[1]
@@ -62,6 +63,8 @@ EXIT_SUCCESS = 0
 EXIT_RUN_FAILED = 1
 EXIT_USAGE_ERROR = 2
 RICH_TAG_PATTERN = re.compile(r"\[/?[^\]]+\]")
+SWARM_RUN_USAGE = """--swarm-run PRESET '{"k":"v"}'"""
+SWARM_RUN_VARS_PREVIEW_CHARS = 80
 
 from cli._version import __version__ as _VERSION  # noqa: E402 — single source of truth
 
@@ -71,6 +74,47 @@ if TYPE_CHECKING:
 # Agent color assignments for swarm display
 _AGENT_STYLES = ["cyan", "magenta", "green", "yellow", "blue", "bright_red", "bright_cyan", "bright_magenta"]
 _agent_color_map: dict[str, str] = {}
+
+
+def _truncate_swarm_vars_preview(value: str) -> str:
+    """Return a compact preview for a CLI JSON token."""
+    if len(value) <= SWARM_RUN_VARS_PREVIEW_CHARS:
+        return value
+    return value[: SWARM_RUN_VARS_PREVIEW_CHARS - 3] + "..."
+
+
+def _print_swarm_vars_json_error(vars_json: str, exc: json.JSONDecodeError) -> None:
+    """Print actionable JSON diagnostics for ``--swarm-run`` vars."""
+    preview = rich_escape(_truncate_swarm_vars_preview(vars_json))
+    console.print(
+        "[red]Invalid JSON for --swarm-run VARS.[/red]\n"
+        f"Offending string: {preview}\n"
+        f"JSON parse error: {rich_escape(str(exc))}\n"
+        f"Correct usage: {SWARM_RUN_USAGE}\n"
+        "shell quoting is the usual culprit; wrap the JSON in single quotes."
+    )
+
+
+def _parse_swarm_run_args(values: list[str]) -> tuple[str, Optional[str]] | None:
+    """Validate ``--swarm-run`` values before starting the swarm."""
+    if len(values) > 2:
+        extras = ", ".join(rich_escape(repr(token)) for token in values[2:])
+        console.print(
+            "[red]Invalid --swarm-run arguments:[/red] "
+            f"unexpected extra token(s): {extras}\n"
+            f"Correct usage: {SWARM_RUN_USAGE}"
+        )
+        return None
+
+    preset = values[0]
+    vars_json = values[1] if len(values) > 1 else None
+    if vars_json:
+        try:
+            json.loads(vars_json)
+        except json.JSONDecodeError as exc:
+            _print_swarm_vars_json_error(vars_json, exc)
+            return None
+    return preset, vars_json
 
 _HAS_PROMPT_TOOLKIT = False
 try:
@@ -108,8 +152,9 @@ def _build_status_parts(stats: _SessionStats) -> list[str]:
     Returns:
         List of status text segments.
     """
-    provider = os.getenv("LANGCHAIN_PROVIDER", "")
-    model = os.getenv("LANGCHAIN_MODEL_NAME", "")
+    _cfg = get_env_config()
+    provider = _cfg.llm.langchain_provider
+    model = _cfg.llm.langchain_model_name
     model_short = model.split("/")[-1] if "/" in model else model
     label = f"{provider}/{model_short}" if provider else model_short or "unknown"
 
@@ -1495,10 +1540,11 @@ def _build_welcome_panel(term_width: Optional[int] = None) -> Panel:
     term_width = term_width or _terminal_width()
     compact = term_width < 64
     widths = _welcome_widths(term_width)
-    provider = os.getenv("LANGCHAIN_PROVIDER", "(not set)")
-    model = os.getenv("LANGCHAIN_MODEL_NAME", "(not set)")
+    _cfg = get_env_config()
+    provider = _cfg.llm.langchain_provider or "(not set)"
+    model = _cfg.llm.langchain_model_name or "(not set)"
     key_env = _provider_key_env(provider)
-    key_value = os.getenv(key_env or "")
+    key_value = os.getenv(key_env or "")  # noqa: env-gate — dynamic provider key display
     credential_ready = provider in {"ollama", "openai-codex"} or bool(key_value)
     key_state = "READY" if credential_ready else "MISSING"
     recent_runs = len([d for d in RUNS_DIR.iterdir() if d.is_dir()]) if RUNS_DIR.exists() else 0
@@ -1683,12 +1729,13 @@ def _show_settings() -> None:
     term_width = _terminal_width()
     compact = term_width < 104
     value_limit = max(18, min(56, term_width - 28))
-    provider = os.getenv("LANGCHAIN_PROVIDER", "(not set)")
-    model = os.getenv("LANGCHAIN_MODEL_NAME", "(not set)")
+    _cfg = get_env_config()
+    provider = _cfg.llm.langchain_provider or "(not set)"
+    model = _cfg.llm.langchain_model_name or "(not set)"
     provider_key_env = _provider_key_env(provider)
     provider_base_env = _provider_base_env(provider)
-    provider_key = os.getenv(provider_key_env or "")
-    provider_base_url = os.getenv(provider_base_env or "") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or "(not set)"
+    provider_key = os.getenv(provider_key_env or "")  # noqa: env-gate — dynamic provider key display
+    provider_base_url = os.getenv(provider_base_env or "") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or "(not set)"  # noqa: env-gate — dynamic provider URL display
 
     provider_table = Table.grid(expand=True)
     provider_table.add_column(width=12, style="dim")
@@ -1700,9 +1747,9 @@ def _show_settings() -> None:
     runtime_table = Table.grid(expand=True)
     runtime_table.add_column(width=13, style="dim")
     runtime_table.add_column(ratio=1)
-    runtime_table.add_row("Temperature", os.getenv("LANGCHAIN_TEMPERATURE", "0.0"))
-    runtime_table.add_row("Timeout", os.getenv("TIMEOUT_SECONDS", "2400") + "s")
-    runtime_table.add_row("Retries", os.getenv("MAX_RETRIES", "(not set)"))
+    runtime_table.add_row("Temperature", str(_cfg.llm.langchain_temperature))
+    runtime_table.add_row("Timeout", str(_cfg.llm.timeout_seconds) + "s")
+    runtime_table.add_row("Retries", str(_cfg.llm.max_retries))
 
     credential_table = Table.grid(expand=True)
     credential_table.add_column(width=21, style="dim")
@@ -1717,7 +1764,7 @@ def _show_settings() -> None:
     else:
         credential_table.add_row("Provider key", "(unknown provider)")
         credential_ready = False
-    credential_table.add_row("TUSHARE_TOKEN", "***" if os.getenv("TUSHARE_TOKEN") else "(optional)")
+    credential_table.add_row("TUSHARE_TOKEN", "***" if _cfg.data.tushare_token else "(optional)")
 
     panels = [
         Panel(provider_table, title=f"Provider {_state_badge(provider if provider != '(not set)' else None)}", border_style="cyan", padding=(0, 1)),
@@ -2071,7 +2118,7 @@ class _SwarmDashboard:
         return table
 
 
-def cmd_swarm_run_live(preset: str, vars_json: Optional[str] = None) -> None:
+def cmd_swarm_run_live(preset: str, vars_json: Optional[str] = None) -> Optional[int]:
     """Run a swarm preset with Rich Live dashboard."""
     from rich.live import Live
     from src.config import load_swarm_agent_config
@@ -2084,8 +2131,8 @@ def cmd_swarm_run_live(preset: str, vars_json: Optional[str] = None) -> None:
         try:
             user_vars = json.loads(vars_json)
         except json.JSONDecodeError as exc:
-            console.print(f"[red]Invalid JSON: {exc}[/red]")
-            return
+            _print_swarm_vars_json_error(vars_json, exc)
+            return EXIT_USAGE_ERROR
 
     store = SwarmStore(base_dir=SWARM_DIR)
     agent_config = load_swarm_agent_config()
@@ -2402,9 +2449,9 @@ def cmd_swarm_presets() -> None:
     console.print(table)
 
 
-def cmd_swarm_run(preset: str, vars_json: Optional[str] = None) -> None:
+def cmd_swarm_run(preset: str, vars_json: Optional[str] = None) -> Optional[int]:
     """Run swarm preset (legacy polling mode, use cmd_swarm_run_live for streaming)."""
-    cmd_swarm_run_live(preset, vars_json)
+    return cmd_swarm_run_live(preset, vars_json)
 
 
 def cmd_swarm_inspect(preset: str) -> int:
@@ -2762,15 +2809,8 @@ def _authorize_timeout_seconds() -> float:
     Returns:
         The authorize deadline in seconds (a positive float).
     """
-    raw = os.getenv(_LIVE_AUTHORIZE_TIMEOUT_ENV)
-    if raw:
-        try:
-            value = float(raw)
-        except ValueError:
-            return _LIVE_AUTHORIZE_INIT_TIMEOUT_SECONDS
-        if value > 0:
-            return value
-    return _LIVE_AUTHORIZE_INIT_TIMEOUT_SECONDS
+    raw = get_env_config().agent_tuning.vibe_live_authorize_timeout_s
+    return float(raw) if raw and raw > 0 else float(_LIVE_AUTHORIZE_INIT_TIMEOUT_SECONDS)
 
 
 def _live_api_base() -> str:
@@ -2785,7 +2825,14 @@ def _live_api_base() -> str:
     Returns:
         The API base URL with any trailing slash removed.
     """
-    return os.environ.get("VIBE_TRADING_API_URL", "http://127.0.0.1:8000").rstrip("/")
+    return get_env_config().api.vibe_trading_api_url.rstrip("/")
+
+
+def _api_auth_headers() -> Dict[str, str]:
+    """Return Bearer auth headers for CLI-to-API control calls."""
+    reset_env_config()  # ensure fresh read of auth credentials
+    key = get_env_config().api.api_auth_key.strip()
+    return {"Authorization": f"Bearer {key}"} if key else {}
 
 
 def _live_api_call(method: str, path: str, *, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2816,6 +2863,278 @@ def _live_api_call(method: str, path: str, *, body: Optional[Dict[str, Any]] = N
         return {"status": "error", "error": str(exc)}
 
 
+def _channels_api_call(method: str, path: str, *, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Call an IM channel runtime endpoint on the local API server."""
+    import httpx
+
+    url = f"{_live_api_base()}{path}"
+    headers = _api_auth_headers()
+    try:
+        if method.upper() == "GET":
+            response = httpx.get(url, headers=headers, timeout=10.0)
+        else:
+            response = httpx.post(url, json=body or {}, headers=headers, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:  # noqa: BLE001 - CLI should explain offline API cleanly
+        return {"status": "error", "error": str(exc)}
+
+
+def _channels_local_status() -> Dict[str, Any]:
+    """Build local channel config/import status without starting adapters."""
+    from src.channels.config import load_channels_config
+    from src.channels.registry import inspect_channels
+
+    config = load_channels_config()
+    return {
+        "running": False,
+        "source": "local_config",
+        "channels": inspect_channels(config),
+    }
+
+
+def _print_channels_status(payload: Dict[str, Any]) -> None:
+    """Render IM channel status."""
+    table = Table(title="IM Channels", box=box.SIMPLE)
+    table.add_column("Channel")
+    table.add_column("Configured")
+    table.add_column("Enabled")
+    table.add_column("Available")
+    table.add_column("Loaded")
+    table.add_column("Running")
+    table.add_column("Recovery")
+    channels = payload.get("channels") if isinstance(payload, dict) else {}
+    if not isinstance(channels, dict):
+        channels = {}
+    for name, item in sorted(channels.items()):
+        if not isinstance(item, dict):
+            continue
+        recovery = item.get("install_hint") or item.get("error") or ""
+        table.add_row(
+            str(name),
+            "yes" if item.get("configured") else "no",
+            "yes" if item.get("enabled") else "no",
+            "yes" if item.get("available") else "no",
+            "yes" if item.get("loaded") else "no",
+            "yes" if item.get("running") else "no",
+            str(recovery),
+        )
+    console.print(table)
+    if payload.get("status") == "error":
+        console.print(f"[yellow]API unavailable:[/yellow] {payload.get('error')}")
+        console.print("[dim]Start the backend with `vibe-trading serve --port 8000`, or inspect local config with this status output.[/dim]")
+
+
+def cmd_channels_status(*, json_mode: bool = False, local: bool = False) -> int:
+    """Show IM channel status."""
+    payload = _channels_local_status() if local else _channels_api_call("GET", "/channels/status")
+    if payload.get("status") == "error":
+        local_payload = _channels_local_status()
+        local_payload["status"] = "error"
+        local_payload["error"] = payload.get("error", "")
+        payload = local_payload
+    if json_mode:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        _print_channels_status(payload)
+    return EXIT_SUCCESS
+
+
+def cmd_channels_start(*, json_mode: bool = False) -> int:
+    """Start configured IM channels through the API runtime."""
+    payload = _channels_api_call("POST", "/channels/start")
+    if json_mode:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    elif payload.get("status") == "error":
+        console.print(f"[red]Failed to start IM channels:[/red] {payload.get('error')}")
+        console.print("[dim]Run `vibe-trading serve --port 8000` first, or set VIBE_TRADING_API_URL.[/dim]")
+        return EXIT_RUN_FAILED
+    else:
+        console.print("[green]IM channels started.[/green]")
+        _print_channels_status(payload)
+    return EXIT_SUCCESS
+
+
+def cmd_channels_stop(*, json_mode: bool = False) -> int:
+    """Stop configured IM channels through the API runtime."""
+    payload = _channels_api_call("POST", "/channels/stop")
+    if json_mode:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    elif payload.get("status") == "error":
+        console.print(f"[red]Failed to stop IM channels:[/red] {payload.get('error')}")
+        console.print("[dim]Run `vibe-trading serve --port 8000` first, or set VIBE_TRADING_API_URL.[/dim]")
+        return EXIT_RUN_FAILED
+    else:
+        console.print("[green]IM channels stopped.[/green]")
+        _print_channels_status(payload)
+    return EXIT_SUCCESS
+
+
+def cmd_channels_pairing(channel: str, command: str) -> int:
+    """Run a pairing command against the shared local pairing store."""
+    from src.channels.pairing import handle_pairing_command
+
+    console.print(handle_pairing_command(channel, command))
+    return EXIT_SUCCESS
+
+
+def cmd_channels_login(channel_name: str, *, force: bool = False) -> int:
+    """Run a channel adapter's interactive login hook when available."""
+    import asyncio
+
+    from src.channels.config import load_channels_config
+    from src.channels.manager import ChannelManager
+    from src.channels.bus.queue import MessageBus
+
+    config = load_channels_config()
+    section = dict(config.get(channel_name, {})) if isinstance(config.get(channel_name), dict) else {}
+    if channel_name == "websocket":
+        console.print("[green]WebSocket channel does not require interactive login.[/green]")
+        console.print("[dim]Configure channels.websocket in ~/.vibe-trading/agent.json, then run `vibe-trading channels start`.[/dim]")
+        return EXIT_SUCCESS
+    if not section:
+        console.print(f"[red]No config found for channel '{channel_name}'.[/red]")
+        console.print("[dim]Add it under channels.<name> in ~/.vibe-trading/agent.json, then retry.[/dim]")
+        return EXIT_USAGE_ERROR
+    section["enabled"] = True
+    manager = ChannelManager({channel_name: section}, MessageBus())
+    adapter = manager.get_channel(channel_name)
+    if adapter is None:
+        status = manager.get_status().get(channel_name, {})
+        recovery = status.get("install_hint") or status.get("error") or "adapter unavailable"
+        console.print(f"[red]Channel '{channel_name}' is unavailable.[/red] {recovery}")
+        return EXIT_RUN_FAILED
+    ok = asyncio.run(adapter.login(force=force))
+    if ok:
+        console.print(f"[green]Channel '{channel_name}' login completed.[/green]")
+        return EXIT_SUCCESS
+    console.print(f"[red]Channel '{channel_name}' login failed.[/red]")
+    return EXIT_RUN_FAILED
+
+
+def _dispatch_channels(args: argparse.Namespace) -> int:
+    """Dispatch IM channel subcommands."""
+    command = args.channels_command
+    if command == "status":
+        return cmd_channels_status(json_mode=args.channels_json, local=args.local)
+    if command == "start":
+        return cmd_channels_start(json_mode=args.channels_json)
+    if command == "stop":
+        return cmd_channels_stop(json_mode=args.channels_json)
+    if command == "pairing":
+        text = " ".join([args.pairing_command, *args.pairing_args]).strip()
+        return cmd_channels_pairing(args.channel, text or "list")
+    if command == "login":
+        return cmd_channels_login(args.channel_name, force=args.force)
+    console.print("[red]channels requires a subcommand.[/red] Try: vibe-trading channels status")
+    return EXIT_USAGE_ERROR
+# QVERIS-INTEGRATION
+def _print_qveris_config(config) -> None:  # QVERIS-INTEGRATION
+    """Render local QVeris config."""  # QVERIS-INTEGRATION
+    from src.tools.qveris_tool import SIGNUP_URL, INVITE_CODE, has_qveris_credentials, is_qveris_configured, mask_api_key, normalize_qveris_mode  # QVERIS-INTEGRATION
+    table = Table(title="Data Routing", box=box.SIMPLE)  # QVERIS-INTEGRATION
+    table.add_column("Field")  # QVERIS-INTEGRATION
+    table.add_column("Value")  # QVERIS-INTEGRATION
+    table.add_row("mode", normalize_qveris_mode(config.mode))  # QVERIS-INTEGRATION
+    table.add_row("free_route", "built-in public data")  # QVERIS-INTEGRATION
+    table.add_row("premium_provider", "QVeris")  # QVERIS-INTEGRATION
+    table.add_row("paid_active", "yes" if is_qveris_configured(config) else "no")  # QVERIS-INTEGRATION
+    table.add_row("premium_key", "yes" if has_qveris_credentials(config) else "no")  # QVERIS-INTEGRATION
+    table.add_row("base_url", config.base_url)  # QVERIS-INTEGRATION
+    table.add_row("api_key", mask_api_key(config.api_key) or "(not set)")  # QVERIS-INTEGRATION
+    table.add_row("budget/session", str(config.budget_credits_per_session))  # QVERIS-INTEGRATION
+    table.add_row("signup", SIGNUP_URL)  # QVERIS-INTEGRATION
+    table.add_row("invite_code", INVITE_CODE)  # QVERIS-INTEGRATION
+    console.print(table)  # QVERIS-INTEGRATION
+# QVERIS-INTEGRATION
+def cmd_qveris_status() -> int:  # QVERIS-INTEGRATION
+    """Show QVeris local config and live status when configured."""  # QVERIS-INTEGRATION
+    from src.tools.qveris_tool import QVerisClient, is_qveris_configured, load_qveris_config  # QVERIS-INTEGRATION
+    config = load_qveris_config()  # QVERIS-INTEGRATION
+    _print_qveris_config(config)  # QVERIS-INTEGRATION
+    if not is_qveris_configured(config):  # QVERIS-INTEGRATION
+        return EXIT_SUCCESS  # QVERIS-INTEGRATION
+    try:  # QVERIS-INTEGRATION
+        payload = QVerisClient(config).search("status", limit=1)  # QVERIS-INTEGRATION
+        console.print(f"[green]QVeris reachable.[/green] remaining_credits={payload.get('remaining_credits')}")  # QVERIS-INTEGRATION
+        return EXIT_SUCCESS  # QVERIS-INTEGRATION
+    except Exception as exc:  # noqa: BLE001  # QVERIS-INTEGRATION
+        console.print(f"[red]QVeris status failed:[/red] {exc}")  # QVERIS-INTEGRATION
+        return EXIT_RUN_FAILED  # QVERIS-INTEGRATION
+# QVERIS-INTEGRATION
+def cmd_qveris_enable(*, key: str | None = None, url: str | None = None) -> int:  # QVERIS-INTEGRATION
+    """Enable QVeris if an API key is present or supplied."""  # QVERIS-INTEGRATION
+    from src.tools.qveris_tool import SIGNUP_URL, INVITE_CODE, QVerisConfig, _read_config_file, save_qveris_config  # QVERIS-INTEGRATION
+    existing = _read_config_file()  # QVERIS-INTEGRATION
+    api_key = (key or existing.api_key or "").strip()  # QVERIS-INTEGRATION
+    if not api_key:  # QVERIS-INTEGRATION
+        console.print("[yellow]QVeris API key is required to enable the integration.[/yellow]")  # QVERIS-INTEGRATION
+        console.print(f"[dim]Sign up: {SIGNUP_URL}  invite_code={INVITE_CODE}[/dim]")  # QVERIS-INTEGRATION
+        return EXIT_USAGE_ERROR  # QVERIS-INTEGRATION
+    base_url = (url or existing.base_url).strip().rstrip("/")  # QVERIS-INTEGRATION
+    if not base_url.startswith(("http://", "https://")):  # QVERIS-INTEGRATION
+        console.print("[red]--url must start with http:// or https://[/red]")  # QVERIS-INTEGRATION
+        return EXIT_USAGE_ERROR  # QVERIS-INTEGRATION
+    saved = save_qveris_config(QVerisConfig(True, base_url, api_key, "paid", existing.budget_credits_per_session))  # QVERIS-INTEGRATION
+    console.print("[green]QVeris paid route enabled.[/green]")  # QVERIS-INTEGRATION
+    _print_qveris_config(saved)  # QVERIS-INTEGRATION
+    return EXIT_SUCCESS  # QVERIS-INTEGRATION
+# QVERIS-INTEGRATION
+def cmd_qveris_mode(
+    *,
+    mode: str,
+    budget: float | None = None,
+    key: str | None = None,
+    url: str | None = None,
+) -> int:  # QVERIS-INTEGRATION
+    """Switch QVeris between free and paid modes."""  # QVERIS-INTEGRATION
+    from src.tools.qveris_tool import QVerisConfig, _read_config_file, normalize_qveris_mode, save_qveris_config  # QVERIS-INTEGRATION
+    existing = _read_config_file()  # QVERIS-INTEGRATION
+    next_mode = normalize_qveris_mode(mode)  # QVERIS-INTEGRATION
+    next_budget = existing.budget_credits_per_session if budget is None else max(float(budget), 0.0)  # QVERIS-INTEGRATION
+    base_url = (url or existing.base_url).strip().rstrip("/")  # QVERIS-INTEGRATION
+    if not base_url.startswith(("http://", "https://")):  # QVERIS-INTEGRATION
+        console.print("[red]--url must start with http:// or https://[/red]")  # QVERIS-INTEGRATION
+        return EXIT_USAGE_ERROR  # QVERIS-INTEGRATION
+    api_key = (key or existing.api_key or "").strip()  # QVERIS-INTEGRATION
+    saved = save_qveris_config(QVerisConfig(next_mode == "paid", base_url, api_key, next_mode, next_budget))  # QVERIS-INTEGRATION
+    console.print(f"[green]QVeris mode set to {next_mode}.[/green]")  # QVERIS-INTEGRATION
+    _print_qveris_config(saved)  # QVERIS-INTEGRATION
+    return EXIT_SUCCESS  # QVERIS-INTEGRATION
+# QVERIS-INTEGRATION
+def cmd_qveris_disable() -> int:  # QVERIS-INTEGRATION
+    """Disable QVeris without deleting the stored key."""  # QVERIS-INTEGRATION
+    from src.tools.qveris_tool import QVerisConfig, _read_config_file, save_qveris_config  # QVERIS-INTEGRATION
+    existing = _read_config_file()  # QVERIS-INTEGRATION
+    save_qveris_config(QVerisConfig(False, existing.base_url, existing.api_key, "free", existing.budget_credits_per_session))  # QVERIS-INTEGRATION
+    console.print("[green]QVeris disabled.[/green]")  # QVERIS-INTEGRATION
+    return EXIT_SUCCESS  # QVERIS-INTEGRATION
+# QVERIS-INTEGRATION
+def cmd_qveris_usage() -> int:  # QVERIS-INTEGRATION
+    """Show recent QVeris usage events."""  # QVERIS-INTEGRATION
+    from src.tools.qveris_tool import QVerisClient, is_qveris_configured, load_qveris_config  # QVERIS-INTEGRATION
+    config = load_qveris_config()  # QVERIS-INTEGRATION
+    if not is_qveris_configured(config):  # QVERIS-INTEGRATION
+        console.print("[yellow]QVeris is not configured.[/yellow]")  # QVERIS-INTEGRATION
+        return EXIT_USAGE_ERROR  # QVERIS-INTEGRATION
+    try:  # QVERIS-INTEGRATION
+        payload = QVerisClient(config).usage_history(limit=10, page_size=10)  # QVERIS-INTEGRATION
+    except Exception as exc:  # noqa: BLE001  # QVERIS-INTEGRATION
+        console.print(f"[red]QVeris usage failed:[/red] {exc}")  # QVERIS-INTEGRATION
+        return EXIT_RUN_FAILED  # QVERIS-INTEGRATION
+    print(json.dumps(payload, indent=2, ensure_ascii=False))  # QVERIS-INTEGRATION
+    return EXIT_SUCCESS  # QVERIS-INTEGRATION
+def _dispatch_data(args: argparse.Namespace) -> int:  # QVERIS-INTEGRATION
+    """Dispatch user-facing data-routing commands."""  # QVERIS-INTEGRATION
+    if args.data_command == "status":  # QVERIS-INTEGRATION
+        return cmd_qveris_status()  # QVERIS-INTEGRATION
+    if args.data_command == "mode":  # QVERIS-INTEGRATION
+        return cmd_qveris_mode(mode=args.mode, budget=args.budget, key=args.key, url=args.url)  # QVERIS-INTEGRATION
+    if args.data_command == "usage":  # QVERIS-INTEGRATION
+        return cmd_qveris_usage()  # QVERIS-INTEGRATION
+    console.print("[red]data requires a subcommand.[/red] Try: vibe-trading data status")  # QVERIS-INTEGRATION
+    return EXIT_USAGE_ERROR  # QVERIS-INTEGRATION
+# QVERIS-INTEGRATION
 def _live_server_config(broker: str):
     """Resolve the protected MCP server config for ``broker``.
 
@@ -4082,6 +4401,40 @@ def _build_parser() -> argparse.ArgumentParser:
     login_parser.add_argument("provider", help="OAuth provider name, e.g. openai-codex")
     provider_subparsers.add_parser("doctor", help="Print redacted provider diagnostics")
 
+    # QVERIS-INTEGRATION
+    data_parser = subparsers.add_parser("data", help="Manage data routing mode")  # QVERIS-INTEGRATION
+    data_subparsers = data_parser.add_subparsers(dest="data_command")  # QVERIS-INTEGRATION
+    data_subparsers.add_parser("status", help="Show active data routing mode")  # QVERIS-INTEGRATION
+    data_mode = data_subparsers.add_parser("mode", help="Switch between free public data and paid data routing")  # QVERIS-INTEGRATION
+    data_mode.add_argument("mode", choices=["free", "paid"], help="free uses built-in public data; paid enables premium data execution")  # QVERIS-INTEGRATION
+    data_mode.add_argument("--budget", type=float, help="Paid-mode credit budget per session")  # QVERIS-INTEGRATION
+    data_mode.add_argument("--key", help="Premium data API key")  # QVERIS-INTEGRATION
+    data_mode.add_argument("--url", help="Premium data API base URL")  # QVERIS-INTEGRATION
+    data_subparsers.add_parser("usage", help="Show recent paid data usage")  # QVERIS-INTEGRATION
+    # QVERIS-INTEGRATION
+    channels_parser = subparsers.add_parser("channels", help="Manage IM channel adapters")
+    channels_subparsers = channels_parser.add_subparsers(dest="channels_command")
+    channels_status = channels_subparsers.add_parser("status", help="Show IM channel status")
+    channels_status.add_argument("--json", dest="channels_json", action="store_true", help="Print JSON")
+    channels_status.add_argument("--local", action="store_true", help="Inspect local config without contacting the API")
+    channels_start = channels_subparsers.add_parser("start", help="Start configured IM channels through the API")
+    channels_start.add_argument("--json", dest="channels_json", action="store_true", help="Print JSON")
+    channels_stop = channels_subparsers.add_parser("stop", help="Stop configured IM channels through the API")
+    channels_stop.add_argument("--json", dest="channels_json", action="store_true", help="Print JSON")
+    channels_login = channels_subparsers.add_parser("login", help="Run a channel adapter login hook")
+    channels_login.add_argument("channel_name", help="Channel name, e.g. weixin, feishu, whatsapp")
+    channels_login.add_argument("--force", action="store_true", help="Ignore existing credentials where supported")
+    channels_pairing = channels_subparsers.add_parser("pairing", help="Manage IM sender pairing")
+    channels_pairing.add_argument("--channel", default="telegram", help="Channel context for list/revoke commands")
+    channels_pairing.add_argument(
+        "pairing_command",
+        nargs="?",
+        default="list",
+        choices=["list", "approve", "deny", "revoke"],
+        help="Pairing command",
+    )
+    channels_pairing.add_argument("pairing_args", nargs="*", help="Pairing command arguments")
+
     list_parser = subparsers.add_parser("list", help="List runs")
     list_parser.add_argument("--limit", dest="list_limit", type=int, default=20, help="Maximum number of runs")
 
@@ -4411,7 +4764,7 @@ _PROVIDER_CHOICES: list[dict[str, str | None]] = [
         "key_env": None,
         "base_env": "OPENAI_CODEX_BASE_URL",
         "base_url": "https://chatgpt.com/backend-api/codex/responses",
-        "model": "openai-codex/gpt-5.3-codex",
+        "model": "openai-codex/gpt-5.4",
         "key_prefix": None,
         "key_placeholder": None,
     },
@@ -4892,6 +5245,29 @@ def cmd_dev(
         )
         return EXIT_USAGE_ERROR
 
+    # `npm run dev` invokes the local Vite binary at
+    # ``frontend/node_modules/.bin/vite``. If ``node_modules`` does not
+    # exist (or is missing the Vite package), npm's bare-script
+    # resolution will print a confusing "vite is not a command" error
+    # and exit. Detect this case up front and point the user at
+    # ``vibe-trading setup`` instead.
+    vite_bin = frontend_dir / "node_modules" / ".bin" / ("vite.cmd" if _is_windows() else "vite")
+    if not vite_bin.exists():
+        console.print(
+            Panel(
+                f"[red]Frontend dependencies not installed.[/red]\n"
+                f"  Missing: [dim]{frontend_dir / 'node_modules'}[/dim]\n\n"
+                "Run this first:\n"
+                "  [cyan]vibe-trading setup[/cyan]\n\n"
+                "[dim]Or, to start the dev mode anyway and install on the fly,\n"
+                "run [bold]vibe-trading setup[/bold] in another terminal.[/dim]",
+                title="vibe-trading dev",
+                border_style="red",
+                padding=(0, 1),
+            )
+        )
+        return EXIT_USAGE_ERROR
+
     node, npm = _resolve_node_and_npm()
     if not node or not npm:
         missing = [name for name, path_ in (("node", node), ("npm", npm)) if not path_]
@@ -5009,6 +5385,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_provider_doctor()
         console.print("[red]provider requires a subcommand.[/red] Try: vibe-trading provider doctor")
         return EXIT_USAGE_ERROR
+    if args.command == "channels":
+        return _coerce_exit_code(_dispatch_channels(args))
+    if args.command == "data":  # QVERIS-INTEGRATION
+        return _coerce_exit_code(_dispatch_data(args))  # QVERIS-INTEGRATION
     if args.command == "run":
         return _handle_prompt_command(
             args.run_prompt,
@@ -5061,8 +5441,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.swarm_inspect:
         return _coerce_exit_code(cmd_swarm_inspect(args.swarm_inspect))
     if args.swarm_run:
-        preset_name = args.swarm_run[0]
-        vars_json = args.swarm_run[1] if len(args.swarm_run) > 1 else None
+        parsed_swarm_run = _parse_swarm_run_args(args.swarm_run)
+        if parsed_swarm_run is None:
+            return EXIT_USAGE_ERROR
+        preset_name, vars_json = parsed_swarm_run
         return _coerce_exit_code(cmd_swarm_run_live(preset_name, vars_json))
     if args.swarm_list:
         return _coerce_exit_code(cmd_swarm_list())

@@ -15,6 +15,8 @@ from typing import List, Optional
 from rich.console import Console
 from rich.table import Table
 
+from src.config.accessor import get_env_config
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -32,8 +34,9 @@ def _check_llm_provider() -> CheckResult:
     from src.providers.llm import _ensure_dotenv, _sync_provider_env, provider_diagnostics
 
     _ensure_dotenv()
-    provider = os.getenv("LANGCHAIN_PROVIDER", "").strip()
-    model = os.getenv("LANGCHAIN_MODEL_NAME", "").strip()
+    _cfg = get_env_config()
+    provider = _cfg.llm.langchain_provider.strip()
+    model = _cfg.llm.langchain_model_name.strip()
 
     if not provider:
         return CheckResult(
@@ -55,9 +58,9 @@ def _check_llm_provider() -> CheckResult:
     _sync_provider_env()
     diagnostics = provider_diagnostics()
     if provider.lower() in {"minimax-token-plan", "minimax_token_plan"}:
-        base_url = os.getenv("MINIMAX_TOKEN_PLAN_BASE_URL", "")
+        base_url = os.getenv("MINIMAX_TOKEN_PLAN_BASE_URL", "")  # noqa: env-gate — provider-specific diagnostic URL
     else:
-        base_url = os.getenv("OPENAI_BASE_URL", "") or os.getenv("OPENAI_API_BASE", "")
+        base_url = os.getenv("OPENAI_BASE_URL", "") or os.getenv("OPENAI_API_BASE", "")  # noqa: env-gate — diagnostic base URL fallback
     proxy_label = ",".join(sorted(diagnostics.get("proxy", {}).keys())) or "none"
     diag_hint = (
         f"base={diagnostics['base_url']} "
@@ -112,7 +115,7 @@ def _check_llm_provider() -> CheckResult:
         ping_url = base_url.rstrip("/")
         if ping_url.endswith("/v1"):
             ping_url = ping_url[:-3]
-        requests.get(ping_url, timeout=10)
+        requests.get(ping_url, timeout=10, allow_redirects=False)
         if provider.lower() in {"minimax-token-plan", "minimax_token_plan"}:
             message = f"{model} via {base_url}"
         else:
@@ -192,7 +195,7 @@ def _check_yfinance() -> CheckResult:
 
 def _check_tushare() -> CheckResult:
     """Check Tushare token configuration."""
-    token = os.getenv("TUSHARE_TOKEN", "").strip()
+    token = get_env_config().data.tushare_token.strip()
     if not token or token == "your-tushare-token":
         return CheckResult(
             name="Tushare",
@@ -228,11 +231,7 @@ def _check_akshare() -> CheckResult:
 
 def _check_content_filter_threshold() -> CheckResult:
     """Report the configured content filter warning threshold."""
-    raw = os.getenv("CONTENT_FILTER_WARNING_THRESHOLD", "0.05")
-    try:
-        threshold = float(raw)
-    except (TypeError, ValueError):
-        threshold = 0.05
+    threshold = get_env_config().agent_tuning.content_filter_warning_threshold
     return CheckResult(
         name="Content Filter Threshold",
         status="ready",

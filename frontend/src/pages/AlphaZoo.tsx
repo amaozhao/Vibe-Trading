@@ -84,8 +84,16 @@ const ZOO_CARDS: ZooCard[] = [
     title: "Academic Anomalies",
     description:
       "Curated long-horizon anomalies from the academic literature (value, momentum, quality, low-vol, etc.).",
-    approxCount: 6,
+    approxCount: 10,
     accent: "from-violet-500/20 to-violet-500/5",
+  },
+  {
+    id: "fundamental",
+    title: "PIT-Safe Fundamentals",
+    description:
+      "Quality and value factors computed from PIT-safe SEC company facts — earnings yield, ROE, gross profitability, asset growth (filed-date anchored).",
+    approxCount: 4,
+    accent: "from-rose-500/20 to-rose-500/5",
   },
 ];
 
@@ -246,9 +254,9 @@ function BrowseView() {
                   {z.approxCount}
                 </span>
               </div>
-              <h3 className="font-semibold text-sm leading-tight">{i18n.t("alphaZoo.zooCardTitle." + z.id)}</h3>
+              <h3 className="font-semibold text-sm leading-tight">{i18n.t("alphaZoo.zooCardTitle." + z.id as any, { defaultValue: z.title })}</h3>
               <p className="text-xs text-muted-foreground line-clamp-3">
-                {i18n.t("alphaZoo.zooCardDesc." + z.id)}
+                {i18n.t("alphaZoo.zooCardDesc." + z.id as any, { defaultValue: z.description })}
               </p>
             </button>
           );
@@ -289,7 +297,7 @@ function BrowseView() {
             <option value="">{i18n.t("alphaZoo.allZoos")}</option>
             {ZOO_CARDS.map((z) => (
               <option key={z.id} value={z.id}>
-                {i18n.t("alphaZoo.zooCardTitle." + z.id)}
+                {i18n.t("alphaZoo.zooCardTitle." + z.id as any, { defaultValue: z.title })}
               </option>
             ))}
           </select>
@@ -325,7 +333,7 @@ function BrowseView() {
             <option value="">{i18n.t("alphaZoo.allUniverses")}</option>
             {UNIVERSE_OPTIONS.map((u) => (
               <option key={u.value} value={u.value}>
-                {i18n.t("alphaZoo.universeOption." + u.value)}
+                {i18n.t("alphaZoo.universeOption." + u.value as any, { defaultValue: u.label })}
               </option>
             ))}
           </select>
@@ -801,7 +809,7 @@ function BenchView() {
           >
             {ZOO_CARDS.map((z) => (
               <option key={z.id} value={z.id}>
-                {i18n.t("alphaZoo.zooCardTitle." + z.id)}
+                {i18n.t("alphaZoo.zooCardTitle." + z.id as any, { defaultValue: z.title })}
               </option>
             ))}
           </select>
@@ -817,7 +825,7 @@ function BenchView() {
           >
             {UNIVERSE_OPTIONS.map((u) => (
               <option key={u.value} value={u.value}>
-                {i18n.t("alphaZoo.universeOption." + u.value)}
+                {i18n.t("alphaZoo.universeOption." + u.value as any, { defaultValue: u.label })}
               </option>
             ))}
           </select>
@@ -1280,7 +1288,7 @@ function CompareView() {
             >
               {UNIVERSE_OPTIONS.map((u) => (
                 <option key={u.value} value={u.value}>
-                  {i18n.t("alphaZoo.universeOption." + u.value)}
+                  {i18n.t("alphaZoo.universeOption." + u.value as any, { defaultValue: u.label })}
                 </option>
               ))}
             </select>
@@ -1307,7 +1315,7 @@ function CompareView() {
             >
               {SORT_OPTIONS.map((s) => (
                 <option key={s.value} value={s.value}>
-                  {i18n.t("alphaZoo.sortOption." + (s.value === "ic_mean" ? "icMean" : s.value === "ic_positive_ratio" ? "icPositiveRatio" : s.value === "ic_count" ? "icCount" : s.value))}
+                  {i18n.t("alphaZoo.sortOption." + (s.value === "ic_mean" ? "icMean" : s.value === "ic_positive_ratio" ? "icPositiveRatio" : s.value === "ic_count" ? "icCount" : s.value) as any, { defaultValue: s.label })}
                 </option>
               ))}
             </select>
