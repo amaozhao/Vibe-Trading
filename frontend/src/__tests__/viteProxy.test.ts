@@ -14,4 +14,9 @@ describe("Vite API proxy config", () => {
     expect(config).toContain('"/settings/llm"');
     expect(config).toContain('"/settings/data-sources"');
   });
+
+  it("allows backend port env overrides", () => {
+    expect(config).toContain("VITE_BACKEND_PORT");
+    expect(config).toContain("VIBE_BACKEND_PORT");
+  });
 });

@@ -18,7 +18,8 @@ const PROXY_PATHS = [
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const apiTarget = env.VITE_API_URL || "http://127.0.0.1:8899";
+  const backendPort = env.VITE_BACKEND_PORT || env.BACKEND_PORT || env.VIBE_BACKEND_PORT || "8899";
+  const apiTarget = env.VITE_API_URL || `http://127.0.0.1:${backendPort}`;
   const apiProxy = { target: apiTarget, changeOrigin: true };
   const apiProxyWithHtmlFallback = {
     ...apiProxy,
