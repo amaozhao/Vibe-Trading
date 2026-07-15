@@ -136,6 +136,12 @@ class LLMConfig(_EnvBase):
         default="https://chatgpt.com/backend-api/codex/responses",
     )
     openai_model: str = Field(alias="OPENAI_MODEL", default="")
+    minimax_token_plan_api_key: str = Field(alias="MINIMAX_TOKEN_PLAN_API_KEY", default="")
+    minimax_token_plan_base_url: str = Field(
+        alias="MINIMAX_TOKEN_PLAN_BASE_URL",
+        default="https://api.minimaxi.com/anthropic",
+    )
+    minimax_token_plan_max_tokens: int = Field(alias="MINIMAX_TOKEN_PLAN_MAX_TOKENS", default=16_000)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +176,9 @@ class DataConfig(_EnvBase):
     qveris_base_url: str = Field(alias="QVERIS_BASE_URL", default="")
     rsshub_base_url: str = Field(alias="RSSHUB_BASE_URL", default="")
     dashscope_api_key: str = Field(alias="DASHSCOPE_API_KEY", default="")
+    longbridge_app_key: str = Field(alias="LONGBRIDGE_APP_KEY", default="")
+    longbridge_app_secret: str = Field(alias="LONGBRIDGE_APP_SECRET", default="")
+    longbridge_access_token: str = Field(alias="LONGBRIDGE_ACCESS_TOKEN", default="")
 
 
 # ---------------------------------------------------------------------------

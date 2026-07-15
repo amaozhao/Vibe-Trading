@@ -6,6 +6,10 @@ from unittest.mock import patch
 import cli
 
 
+def _provider_choice(name: str) -> int:
+    return next(i for i, option in enumerate(cli._PROVIDER_CHOICES, 1) if option["provider"] == name)
+
+
 class TestCliInit:
     def test_render_env_content_openrouter(self) -> None:
         content = cli._render_env_content(
@@ -81,7 +85,7 @@ class TestCliInit:
         env_path = tmp_path / ".env"
 
         with patch.object(cli, "_INIT_ENV_PATH", env_path), \
-             patch.object(cli.IntPrompt, "ask", return_value=13), \
+             patch.object(cli.IntPrompt, "ask", return_value=_provider_choice("ollama")), \
              patch.object(
                  cli.Prompt,
                  "ask",
@@ -106,7 +110,7 @@ class TestCliInit:
         env_path = tmp_path / ".env"
 
         with patch.object(cli, "_INIT_ENV_PATH", env_path), \
-             patch.object(cli.IntPrompt, "ask", return_value=14), \
+             patch.object(cli.IntPrompt, "ask", return_value=_provider_choice("openai-codex")), \
              patch.object(
                  cli.Prompt,
                  "ask",

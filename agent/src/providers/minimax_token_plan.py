@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 from urllib.parse import urlparse
+
+from src.config.accessor import get_env_config
 
 try:
     import httpx
@@ -245,18 +246,17 @@ class MiniMaxTokenPlanLLM:
     ) -> None:
         if httpx is None:
             raise RuntimeError("MiniMax Token Plan requires httpx. Install dependencies first.")
+        config = get_env_config().llm
         self.model = model
-        self.api_key = api_key or os.getenv("MINIMAX_TOKEN_PLAN_API_KEY", "")
+        self.api_key = api_key or config.minimax_token_plan_api_key
         if not self.api_key:
             raise RuntimeError("MINIMAX_TOKEN_PLAN_API_KEY is not set")
         self.base_url = validate_minimax_token_plan_base_url(
-            base_url or os.getenv("MINIMAX_TOKEN_PLAN_BASE_URL", DEFAULT_MINIMAX_TOKEN_PLAN_URL)
+            base_url or config.minimax_token_plan_base_url
         )
         self.temperature = temperature
         self.timeout = timeout
-        self.max_tokens = max_tokens or int(
-            os.getenv("MINIMAX_TOKEN_PLAN_MAX_TOKENS", str(DEFAULT_MINIMAX_TOKEN_PLAN_MAX_TOKENS))
-        )
+        self.max_tokens = max_tokens or config.minimax_token_plan_max_tokens
         self.tools = tools or []
 
     def bind_tools(self, tools: list[dict[str, Any]]) -> "MiniMaxTokenPlanLLM":

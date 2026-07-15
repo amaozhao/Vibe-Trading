@@ -52,6 +52,10 @@ SESSIONS_DIR = Path(__file__).resolve().parents[2] / "sessions"
 KEEP_RECENT = 3
 TOOL_RESULT_LIMIT = 10_000
 LLM_USAGE_ARTIFACT = "llm_usage.json"
+LENGTH_CONTINUATION_PROMPT = (
+    "[SYSTEM] Continue the previous answer exactly from where it stopped. "
+    "Do not restart, do not summarize, and do not repeat already-written sections."
+)
 
 COLLAPSE_PRESERVE_RECENT = 6
 COLLAPSE_TEXT_MIN = 2400
@@ -624,6 +628,7 @@ class AgentLoop:
 
         iteration = 0
         final_content = ""
+        final_content_parts: list[str] = []
         content_filter_count = 0
         consecutive_content_filter_count = 0
         content_filter_circuit_breaker = False
@@ -853,7 +858,29 @@ class AgentLoop:
                 consecutive_content_filter_count = 0
 
                 if not response.has_tool_calls:
-                    final_content = response.content or ""
+                    response_content = response.content or ""
+                    if (
+                        getattr(response, "finish_reason", "stop") == "length"
+                        and response_content
+                        and not is_last_iteration
+                    ):
+                        final_content_parts.append(response_content)
+                        messages.append({"role": "assistant", "content": response_content})
+                        messages.append({"role": "user", "content": LENGTH_CONTINUATION_PROMPT})
+                        trace.write(
+                            {
+                                "type": "answer_truncated",
+                                "iter": current_iter,
+                                "content": response_content[:2000],
+                            }
+                        )
+                        react_trace.append(
+                            {"type": "answer_truncated", "content": response_content[:500]}
+                        )
+                        continue
+
+                    final_content = "".join(final_content_parts) + response_content
+                    final_content_parts.clear()
                     if not final_content:
                         empty_model_response_iter = iteration
                         trace.write(
