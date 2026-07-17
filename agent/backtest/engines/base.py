@@ -376,6 +376,11 @@ class BaseEngine(ABC):
         """Convert target notional exposure to number of units/contracts."""
         return target_notional / price
 
+    def _leverage_for_symbol(self, symbol: str) -> float:
+        """Return leverage used to size and margin one symbol."""
+        del symbol
+        return self.default_leverage
+
     # ── Main entry ──
 
     def run_backtest(
@@ -463,13 +468,18 @@ class BaseEngine(ABC):
         bench_ticker = config.get("benchmark")
         if bench_ticker and bench_ticker != "auto":
             from backtest.benchmark import resolve_benchmark
+            bench_source = config.get("source", "yfinance")
             bench_result = resolve_benchmark(
                 strategy_codes=codes,
-                source=config.get("source", "yfinance"),
+                source=bench_source,
                 start_date=config.get("start_date", ""),
                 end_date=config.get("end_date", ""),
                 interval=interval,
                 explicit=bench_ticker,
+                # Explicit source: fetch the benchmark through its own loader
+                # (keeps e.g. source=local offline). Auto keeps the yfinance
+                # default — its loader only wraps the preloaded strategy data.
+                loader=loader if bench_source != "auto" else None,
             )
             if bench_result is not None:
                 bench_ret = bench_result.ret_series.reindex(dates).fillna(0.0)
@@ -810,7 +820,7 @@ class BaseEngine(ABC):
         if open_price <= 0:
             return None
         price = self.apply_slippage(open_price, direction)
-        leverage = self.default_leverage
+        leverage = self._leverage_for_symbol(symbol)
         target_notional = abs(target_weight) * equity * leverage
         size = self.round_size(
             self._calc_raw_size(symbol, target_notional, price), price
