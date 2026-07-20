@@ -26,8 +26,20 @@ _SOURCE_PATTERNS = [
     # India: NSE (RELIANCE.NS) / BSE (500325.BO). Tickers may carry '&' and '-'
     # (e.g. M&M.NS, BAJAJ-AUTO.NS). Served by Yahoo's public chart endpoint.
     (re.compile(r"^[A-Z0-9&.\-]+\.(NS|BO)$", re.I), "yahoo"),
+    # Yahoo futures (GC=F, CL=F) and forex (EURUSD=X) suffix conventions —
+    # served verbatim by Yahoo's public chart endpoint (#718). Without these,
+    # such symbols fell through to the ``tushare`` default and were routed to
+    # China-market loaders that cannot resolve them.
+    (re.compile(r"^[A-Z0-9]+=F$", re.I), "yahoo"),
+    (re.compile(r"^[A-Z]+=X$", re.I), "yahoo"),
     (re.compile(r"^[A-Z]+-USDT$", re.I), "okx"),
     (re.compile(r"^[A-Z]+/USDT$", re.I), "ccxt"),
+    # Forex pairs and metals (EUR/USD, XAU/USD, EURUSD.FX). mt5 is the head of
+    # the forex chain and degrades to akshare/yfinance via the registry when no
+    # local MT5 terminal is attached. The 3-letter quote cannot collide with
+    # the 4-letter /USDT crypto rule above.
+    (re.compile(r"^[A-Z]{3}/[A-Z]{3}$", re.I), "mt5"),
+    (re.compile(r"^[A-Z]{6}\.FX$", re.I), "mt5"),
 ]
 
 

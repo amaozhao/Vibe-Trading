@@ -46,8 +46,9 @@ def bs_price(S: float, K: float, T: float, r: float, sigma: float,
         >>> round(bs_price(100, 100, 1.0, 0.05, 0.2, "call"), 2)
         10.45
     """
-    if T <= 0 or sigma <= 0:
-        # Expired: return intrinsic value
+    # Non-positive S/K makes log(S/K) undefined; reuse the intrinsic fallback
+    # (iv_smile_adjustment already soft-guards non-positive S/K).
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
         if option_type == "call":
             return max(S - K, 0.0)
         return max(K - S, 0.0)
@@ -78,7 +79,7 @@ def bs_greeks(S: float, K: float, T: float, r: float, sigma: float,
     Returns:
         Dict containing delta, gamma, theta, vega.
     """
-    if T <= 0 or sigma <= 0:
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
         intrinsic_call = 1.0 if S > K else 0.0
         delta = intrinsic_call if option_type == "call" else intrinsic_call - 1.0
         return {"delta": delta, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
@@ -432,12 +433,26 @@ def run_options_backtest(
                     })
 
                 elif action == "close":
-                    # Close: find matching position
+                    # Close: find matching position, honoring a partial-close qty.
                     matched = _find_matching_position(
                         positions, underlying, leg_type, strike, expiry)
                     if matched:
-                        pnl = (opt_price - matched.entry_price) * matched.qty * contract_multiplier
-                        abs_close = opt_price * abs(matched.qty) * contract_multiplier
+                        # An explicit leg ``qty`` closes only that many contracts
+                        # (clamped to the open size); a close leg with no ``qty``
+                        # closes the whole lot (legacy behavior). Cash/PnL and the
+                        # remaining position all scale to the amount actually closed
+                        # so a partial close no longer flattens the lot (#577).
+                        requested = leg.get("qty")
+                        full_mag = abs(matched.qty)
+                        close_mag = full_mag if requested is None else min(abs(requested), full_mag)
+                        if close_mag <= 0:
+                            continue
+                        sign = 1 if matched.qty > 0 else -1
+                        closed_qty = sign * close_mag
+                        remaining_qty = matched.qty - closed_qty
+
+                        pnl = (opt_price - matched.entry_price) * closed_qty * contract_multiplier
+                        abs_close = opt_price * close_mag * contract_multiplier
                         if matched.qty > 0:
                             # Long close: sell to recover
                             cash += abs_close * (1 - commission)
@@ -453,11 +468,24 @@ def run_options_backtest(
                             "expiry": expiry,
                             "side": "close",
                             "price": round(opt_price, 4),
-                            "qty": matched.qty,
+                            "qty": closed_qty,
                             "pnl": round(pnl, 4),
                             "entry_date": matched.entry_date,
                         })
-                        positions.remove(matched)
+                        if abs(remaining_qty) < 1e-9:
+                            positions.remove(matched)
+                        else:
+                            # Reduce the open lot to its remainder instead of
+                            # removing it (new object; positions stay immutable).
+                            positions[positions.index(matched)] = OptionPosition(
+                                option_type=matched.option_type,
+                                strike=matched.strike,
+                                expiry=matched.expiry,
+                                qty=remaining_qty,
+                                entry_price=matched.entry_price,
+                                entry_date=matched.entry_date,
+                                underlying_code=matched.underlying_code,
+                            )
 
         # 4. Compute portfolio mark-to-market value and Greeks
         portfolio_value = cash
@@ -630,7 +658,11 @@ def _calc_options_metrics(
         )
     else:
         growth = final_raw / float(initial_cash)
-        candidate = float(growth ** (bars_per_year / (n - 1)) - 1)
+        # Explosive paths (e.g. 1m bars) can OverflowError before isfinite.
+        try:
+            candidate = float(growth ** (bars_per_year / (n - 1)) - 1)
+        except OverflowError:
+            candidate = float("inf")
         if np.isfinite(candidate):
             ann_ret = candidate
         else:

@@ -19,4 +19,8 @@ describe("Vite API proxy config", () => {
     expect(config).toContain("VITE_BACKEND_PORT");
     expect(config).toContain("VIBE_BACKEND_PORT");
   });
+
+  it("proxies authentication endpoints", () => {
+    expect(config).toContain('"/auth"');
+  });
 });
