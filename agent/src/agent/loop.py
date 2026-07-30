@@ -707,6 +707,7 @@ class AgentLoop:
                 # Streaming output + collect thinking text
                 thinking_chunks: List[str] = []
                 reasoning_chars = 0
+                reasoning_tail = ""
                 last_reasoning_emit: float | None = None
 
                 def _on_text_chunk(delta: str) -> None:
@@ -719,8 +720,12 @@ class AgentLoop:
                     # and evicts tool_call/text_delta events. The first chunk
                     # of each iteration always emits immediately so the UI
                     # flips to "Reasoning…" without delay.
-                    nonlocal reasoning_chars, last_reasoning_emit
+                    nonlocal reasoning_chars, reasoning_tail, last_reasoning_emit
                     reasoning_chars += len(delta)
+                    # Rolling tail rides the already-throttled emit so the UI
+                    # can whisper the current thought; a bounded window keeps
+                    # replay-buffer pressure flat regardless of trace length.
+                    reasoning_tail = (reasoning_tail + delta)[-600:]
                     now = _time.monotonic()
                     if (
                         last_reasoning_emit is not None
@@ -730,7 +735,7 @@ class AgentLoop:
                     last_reasoning_emit = now
                     self._emit(
                         "reasoning_delta",
-                        {"iter": current_iter, "chars": reasoning_chars},
+                        {"iter": current_iter, "chars": reasoning_chars, "tail": reasoning_tail},
                     )
 
                 # On last iteration, drop tool definitions to force text output
@@ -1229,14 +1234,22 @@ class AgentLoop:
             args = _normalize_tool_run_dir(tc.arguments, self.memory.run_dir)
             redacted_args = redact_payload(args)
             event_args = {k: str(v)[:200] for k, v in redacted_args.items()}
-            self._emit("tool_call", {"tool": tc.name, "arguments": event_args, "iter": iteration})
+            self._emit(
+                "tool_call",
+                {
+                    "tool": tc.name,
+                    "arguments": event_args,
+                    "iter": iteration,
+                    "call_id": tc.id,
+                },
+            )
             trace.write({"type": "tool_call", "iter": iteration, "tool": tc.name, "call_id": tc.id, "args": redacted_args})
             runnable.append((tc, args))
 
         # Execute in parallel — each worker gets its own heartbeat + progress emitter.
         def _run(tc_args: tuple) -> tuple:
             tc, args = tc_args
-            result, elapsed_ms = self._invoke_tool(tc.name, args)
+            result, elapsed_ms = self._invoke_tool(tc.name, args, call_id=tc.id)
             return tc, result, elapsed_ms
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(runnable), 8)) as pool:
@@ -1276,15 +1289,29 @@ class AgentLoop:
 
         redacted_args = redact_payload(args)
         event_args = {k: str(v)[:200] for k, v in redacted_args.items()}
-        self._emit("tool_call", {"tool": tc.name, "arguments": event_args, "iter": iteration})
+        self._emit(
+            "tool_call",
+            {
+                "tool": tc.name,
+                "arguments": event_args,
+                "iter": iteration,
+                "call_id": tc.id,
+            },
+        )
         trace.write({"type": "tool_call", "iter": iteration, "tool": tc.name, "call_id": tc.id, "args": redacted_args})
         logger.info(f"Tool call: {tc.name}({list(args.keys())})")
 
-        result, elapsed_ms = self._invoke_tool(tc.name, args)
+        result, elapsed_ms = self._invoke_tool(tc.name, args, call_id=tc.id)
 
         self._finalize_tool_result(tc, result, elapsed_ms, context, messages, trace, react_trace, iteration)
 
-    def _invoke_tool(self, tool_name: str, args: Dict[str, Any]) -> tuple[str, int]:
+    def _invoke_tool(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        *,
+        call_id: str,
+    ) -> tuple[str, int]:
         """Execute a tool with heartbeat + structured progress emission.
 
         Installs a thread-local progress emitter so the tool may call
@@ -1297,6 +1324,7 @@ class AgentLoop:
         Args:
             tool_name: Tool name to execute.
             args: Tool arguments dict.
+            call_id: Stable identity of this tool invocation.
 
         Returns:
             Tuple of (result_str, elapsed_ms).
@@ -1309,11 +1337,13 @@ class AgentLoop:
                 return
             payload = event.to_dict()
             payload["tool"] = tool_name
+            payload["call_id"] = call_id
             self._emit("tool_progress", payload)
 
         def _on_heartbeat(payload: Dict[str, Any]) -> None:
             if timed_out.is_set():
                 return
+            payload["call_id"] = call_id
             self._emit("tool_heartbeat", payload)
 
         t0 = _time.perf_counter()
@@ -1355,6 +1385,7 @@ class AgentLoop:
             elapsed_ms = _elapsed_ms()
             payload: Dict[str, Any] = {
                 "tool": tool_name,
+                "call_id": call_id,
                 "stage": stage,
                 "message": message,
                 "elapsed_s": round(elapsed_ms / 1000, 2),
@@ -1495,7 +1526,16 @@ class AgentLoop:
         )
         preview = trace_result[:200]
         react_trace.append({"type": "tool_call", "tool": tc.name, "result_preview": preview})
-        self._emit("tool_result", {"tool": tc.name, "status": status, "elapsed_ms": elapsed_ms, "preview": preview})
+        self._emit(
+            "tool_result",
+            {
+                "tool": tc.name,
+                "status": status,
+                "elapsed_ms": elapsed_ms,
+                "preview": preview,
+                "call_id": tc.id,
+            },
+        )
 
     # -- Context compression ---------------------------------------------------
 
