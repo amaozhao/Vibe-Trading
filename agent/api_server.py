@@ -9,8 +9,9 @@ infrastructure lives in ``src.api.{security,models,helpers,state}``.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, AsyncIterator, Dict
 
 from fastapi import FastAPI, HTTPException, Request, status  # noqa: F401
 from fastapi.responses import FileResponse  # noqa: F401
@@ -52,6 +53,7 @@ from src.api.security import (  # noqa: F401, E402
     _mint_sse_ticket,
     _origin_matches_request_host,
     _parse_cors_origins,
+    _parse_extra_cors_origins,
     _parse_extra_loopback_hosts,
     _redact_query_secrets,
     _reject_cross_site_browser_request,
@@ -112,37 +114,6 @@ from src.api.state import (  # noqa: F401, E402
 console = Console()
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# FastAPI Application
-# ============================================================================
-
-app = FastAPI(
-    title="Vibe-Trading API",
-    description="Vibe-Trading API: natural-language finance research, backtesting, and swarm workflows",
-    version=APP_VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Middleware functions are defined in src.api.security / src.api.helpers, so
-# the @app.middleware("http") decorator cannot be used here — register them
-# programmatically instead.
-app.middleware("http")(_reject_untrusted_loopback_host)
-app.middleware("http")(_spa_html_deep_link_fallback)
-app.middleware("http")(_apply_security_headers)
-
-# ============================================================================
-# Lifecycle hooks
-# ============================================================================
-
 from src.api.channels_routes import (  # noqa: E402
     _start_channel_runtime,
     _stop_channel_runtime,
@@ -153,11 +124,16 @@ from src.api.scheduled_routes import (  # noqa: E402
 )
 
 
-@app.on_event("startup")
 async def _run_startup_preflight() -> None:
     """Run preflight checks on server startup."""
     from src.preflight import run_preflight
 
+    from src.config import migrate as _migrate
+
+    try:
+        _migrate.migrate_legacy_state()  # one-time pre-#904 state move; must never block startup
+    except Exception:  # pragma: no cover — best-effort
+        logging.getLogger(__name__).warning("Legacy state migration failed", exc_info=True)
     run_preflight(console)
     _start_scheduled_research_executor()
     from src.config.accessor import get_env_config
@@ -166,16 +142,46 @@ async def _run_startup_preflight() -> None:
         await _start_channel_runtime()
 
 
-@app.on_event("shutdown")
 async def _stop_scheduled_research_on_shutdown() -> None:
     """Stop the scheduled research executor on server shutdown."""
-    await _stop_channel_runtime()
-    await _stop_scheduled_research_executor()
+    try:
+        await _stop_channel_runtime()
+    finally:
+        await _stop_scheduled_research_executor()
 
 
-# ============================================================================
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Run API startup and guaranteed reverse-order shutdown."""
+    try:
+        await _run_startup_preflight()
+        yield
+    finally:
+        await _stop_scheduled_research_on_shutdown()
+
+
+app = FastAPI(
+    title="Vibe-Trading API",
+    description="Vibe-Trading API: natural-language finance research, backtesting, and swarm workflows",
+    version=APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=_lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.middleware("http")(_reject_untrusted_loopback_host)
+app.middleware("http")(_spa_html_deep_link_fallback)
+app.middleware("http")(_apply_security_headers)
+
+
 # Route registration + re-exports
-# ============================================================================
 
 # --- Runs ---
 from src.api.runs_routes import register_runs_routes  # noqa: E402
@@ -279,6 +285,11 @@ register_alpha_routes(app)
 # --- Auth helpers (SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)
+
+# --- OpenBB Workspace agent bridge (GET /agents.json, POST /v1/query) ---
+# No-op unless the optional `openbb` extra is installed; self-reports either way.
+from src.openbb_bridge import try_register_openbb_routes  # noqa: E402  # OPENBB-WORKSPACE-INTEGRATION
+try_register_openbb_routes(app)
 
 
 # ============================================================================
