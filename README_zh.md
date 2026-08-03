@@ -52,12 +52,14 @@
 
 > ⚠️ **安全警告：** X 账号 `VibeTrading_HKU`、Virtuals 项目 `101845` 及代币合约 `0x640BDBF77b6447E8b7DB7894cED84BD1c40571f4` 均非 Vibe-Trading 官方。我们从未发行或背书任何代币或 meme 币。请勿购买、连接钱包或签名。[详细说明](SECURITY.md#official-channels--impersonation)。
 
+- **2026-08-02** 🧠 **实时模型发现、可信运行身份与经验证的依赖刷新**：Settings 现在可按需发现已配置 provider 的模型，以稳定告警码和五语控件呈现；每条回复都会记录并在重载后恢复真正服务该请求的不可变 provider/model/reasoning 身份，并在切换会话时安全清空（[#924](https://github.com/HKUDS/Vibe-Trading/pull/924)，感谢 [@QCYTSN](https://github.com/QCYTSN)）。另有 9 个 hash-locked Python 依赖以及 `jsdom`/`postcss` 完成升级，精确版本导入、330 项聚焦测试、前端生产构建与 373 项测试、`main` 全量 CI 和 Dependency Graph 均通过（[#949](https://github.com/HKUDS/Vibe-Trading/pull/949)、[#948](https://github.com/HKUDS/Vibe-Trading/pull/948)）；破坏性的 MCP 2.0 升级仍保持未合并，等待完整的锁文件与运行时迁移（[#950](https://github.com/HKUDS/Vibe-Trading/pull/950)）。
+- **2026-08-01** 🧮 **期权策略分析 + 市场情绪 + 可审计的 USD-M 研究**：全新的期权收益工作流通过 Agent 与 MCP，以解析方式计算到期盈亏极值、精确盈亏平衡点（包括连续零盈亏区间）、与现有引擎一致的开仓佣金，以及现货价格 × 隐含波动率情景（[#946](https://github.com/HKUDS/Vibe-Trading/pull/946)，基于 [#883](https://github.com/HKUDS/Vibe-Trading/pull/883) 重新实现，感谢 @he-yufeng）。只读 `sentiment` 工具可在本地为任意文本打分，并且无需 API 密钥即可获取加密市场恐惧与贪婪指数（[#939](https://github.com/HKUDS/Vibe-Trading/pull/939)，感谢 @Robin1987China）。严格 USD-M 回测现在会持久化有序的成交、资金费、风险和强平事件以及保真度摘要，同时拒绝 100× 严格模式不支持的时间周期（[#936](https://github.com/HKUDS/Vibe-Trading/pull/936)，感谢 @honginp）。可靠性改进还确保先解析标的代码与市场再调用行情数据，以已记录的 OHLC 证据核对最终报价，定时研究会重试瞬时失败，嵌套 MCP 结果也能稳定序列化。
 - **2026-07-31** 🔧 **USD-M 强平生命周期 + 技术指标工具 + 状态目录迁至用户根目录**：可选的 `perpetual_strict` 模式在成交前结算历史资金费，并把逐仓/全仓保证金击穿执行为真实强平（[#903](https://github.com/HKUDS/Vibe-Trading/pull/903)，感谢 @honginp）。只读 `technical_indicators` 工具经现有数据源计算 RSI/MACD/布林带/SMA/EMA（[#921](https://github.com/HKUDS/Vibe-Trading/pull/921)，关联 [#920](https://github.com/HKUDS/Vibe-Trading/issues/920)，感谢 @Robin1987China）。会话、运行产物、swarm 运行与上传文件统一迁到 `~/.vibe-trading`（可用 `VIBE_TRADING_HOME` 重定位），旧数据首次启动自动迁移（[#925](https://github.com/HKUDS/Vibe-Trading/pull/925)，关闭 [#904](https://github.com/HKUDS/Vibe-Trading/issues/904)，感谢 @MuggleJinx）。另有十项正确性修复——Yahoo `.SS` 识别为 A 股、裸代码/前缀式 A 股代码、斜杠分隔的加密货币对、`nan`/`inf` 防护等（[#919](https://github.com/HKUDS/Vibe-Trading/pull/919)、[#926](https://github.com/HKUDS/Vibe-Trading/pull/926)–[#935](https://github.com/HKUDS/Vibe-Trading/pull/935)，感谢 @santhreal）。
+<details>
+<summary>更早的新闻</summary>
+
 - **2026-07-30** 🎨 **全新 WebUI + 韩国（KRX）市场 + OpenBB Workspace 桥接**：Web 界面完成 guided-minimalism 改造——首帧不再闪烁，每轮只保留一个持久活动对象（实时推理耳语 + 刷新后可重建的工具轨迹），会话标题由 LLM 生成，五语言完整对齐。**韩国股票（KRX：KOSPI/KOSDAQ）**成为第 9 个回测引擎——成交时刻判定 ±30% 涨跌停、只做多、2026 年 0.20% 证券交易税、可选 `pykrx` 源（[#693](https://github.com/HKUDS/Vibe-Trading/pull/693)，感谢 @JungHoonGhae）；另有 **OpenBB Workspace 桥接**（[#817](https://github.com/HKUDS/Vibe-Trading/pull/817)，感谢 @shugaoye）与只读**台湾股票快照**工具（[#848](https://github.com/HKUDS/Vibe-Trading/pull/848)，感谢 @TSENGCHIENFENG）。正确性：涨跌停改在**成交时刻**判定，不再用决策 bar 自己的收盘价；同一会话同时只跑一次运行（HTTP 409），用户停止是独立终态（[#676](https://github.com/HKUDS/Vibe-Trading/pull/676)，感谢 @tyj147454413-cmd）。另有 trace 落盘可靠（[#662](https://github.com/HKUDS/Vibe-Trading/pull/662)）、工具结果敏感信息擦除（[#675](https://github.com/HKUDS/Vibe-Trading/pull/675)）、畸形工具参数失败关闭（[#913](https://github.com/HKUDS/Vibe-Trading/pull/913)/[#911](https://github.com/HKUDS/Vibe-Trading/pull/911)，感谢 @santhreal）、OpenAI 直连顶层 `reasoning_effort`（[#755](https://github.com/HKUDS/Vibe-Trading/pull/755)，感谢 @1anter），以及风险透视 / 边密度 / 期权引擎的数值防护（[#909](https://github.com/HKUDS/Vibe-Trading/pull/909)/[#908](https://github.com/HKUDS/Vibe-Trading/pull/908)/[#907](https://github.com/HKUDS/Vibe-Trading/pull/907)）。
 - **2026-07-29** 🔧 **停牌缺口收益修复 + 强平风险建模 + 每次回测自带风险透视**：`bar_returns` 不再吞掉超过前向填充窗口的停牌复牌行情——此前跨缺口的真实涨跌被静默记为 0，导致波动率被低估、Sharpe 被高估；`inf` 前收价也不再被误读成干净的 −100%（[#895](https://github.com/HKUDS/Vibe-Trading/pull/895)，感谢 @darkknight4563）。年化系数表现已覆盖**全部 24 个数据源**的每个周期，并新增覆盖测试：新 loader 缺少年化条目将直接使 CI 失败（[#891](https://github.com/HKUDS/Vibe-Trading/pull/891)，关闭 [#884](https://github.com/HKUDS/Vibe-Trading/issues/884)，感谢 @Robin1987China）。USD-M 永续研究获得确定性的**逐仓/全仓强平**评估（[#889](https://github.com/HKUDS/Vibe-Trading/pull/889)，感谢 @honginp），每次组合回测现在都会产出**风险透视工件**（`risk_xray.json`/`.md`）及集中度/波动率/回撤头条指标（[#900](https://github.com/HKUDS/Vibe-Trading/pull/900)，感谢 @he-yufeng）。`connector` CLI 现在会加载 `~/.vibe-trading/.env`，环境变量类券商凭证恢复可用（[#902](https://github.com/HKUDS/Vibe-Trading/pull/902)，关闭 [#901](https://github.com/HKUDS/Vibe-Trading/issues/901)，感谢 @MuggleJinx）。另有 IM 消息分块保留缩进与技能 frontmatter 文件尾解析两项修复（[#867](https://github.com/HKUDS/Vibe-Trading/pull/867)/[#861](https://github.com/HKUDS/Vibe-Trading/pull/861)，感谢 @santhreal）。
-
-<details>
-<summary>更早的更新</summary>
 
 - **2026-07-28** 🔧 **新一代 Claude 模型解锁 + 收益率符号安全**：弃用 `temperature` 字段的 Claude 模型（opus-4-7、opus-5、sonnet-5）现已可用——适配层在 API 拒绝该字段时自动移除并重试一次，随后记住该模型，无需为每次模型发布单独打补丁（[#890](https://github.com/HKUDS/Vibe-Trading/pull/890)，关闭 [#856](https://github.com/HKUDS/Vibe-Trading/issues/856)，感谢 @yagnikpipaliya）。非交互式 `vibe-trading run` 现在会注入宿主 session id：此前研究目标类工具每次调用都失败，而运行仍报告成功（[#885](https://github.com/HKUDS/Vibe-Trading/issues/885)）。买入持有收益率现已符号安全——前一根收盘价接近零不再让复利基准爆炸，收盘价恰为零也不再产生 `inf`/`nan`（[#872](https://github.com/HKUDS/Vibe-Trading/issues/872)，感谢 @darkknight4563）。前端迁移到 **Node 22 + React Router 8**，消除一条高危安全公告。
 - **2026-07-27** 🔧 **相关性矩阵修正 + vn.py 4.0 导出修复 + 编码修复批次**：滚动相关性矩阵不再对缺失收盘价做前向填充——停牌交易日此前会被算成虚构的 0% 收益，并与对手标的的真实涨跌配对，从而扭曲整个矩阵（[#873](https://github.com/HKUDS/Vibe-Trading/pull/873)，感谢 @ddy4633）。**vn.py 导出**技能已适配 vn.py 4.x 结构，上游 `vnpy.app.cta_strategy` 已不存在，模板改从 `vnpy_ctastrategy` 导入（[#869](https://github.com/HKUDS/Vibe-Trading/pull/869)，感谢 @y85998607）。另有六项修复：文档阅读器与交易流水 CSV 的 UTF-16 BOM 解码、数值转换前剥离货币符号、`BTCUSDT` 形式的代码识别为加密货币、小写 `1h`/`1d` 周期的年化计算修正，以及技能目录名保留中日韩字符（[#862](https://github.com/HKUDS/Vibe-Trading/pull/862)、[#863](https://github.com/HKUDS/Vibe-Trading/pull/863)、[#864](https://github.com/HKUDS/Vibe-Trading/pull/864)、[#865](https://github.com/HKUDS/Vibe-Trading/pull/865)、[#866](https://github.com/HKUDS/Vibe-Trading/pull/866)、[#868](https://github.com/HKUDS/Vibe-Trading/pull/868)，感谢 @santhreal）。
@@ -980,19 +982,24 @@ Settings 读取无副作用：`GET /settings/llm` 和 `GET /settings/data-source
 
 ### 定时研究（Scheduled research）
 
-让研究 prompt 或回测按固定周期重复运行。后台执行器**默认关闭**——启动服务时设置 `VIBE_TRADING_ENABLE_SCHEDULER=1` 才会开启：
+让研究 prompt 或回测按固定周期重复运行——既可以在 Web UI 的**定时任务**页面操作，也可以走 REST。后台执行器**默认关闭**——启动服务时设置 `VIBE_TRADING_ENABLE_SCHEDULER=1` 才会开启：
 
 ```bash
 VIBE_TRADING_ENABLE_SCHEDULER=1 vibe-trading serve --port 8899
 ```
 
-然后通过 REST 创建任务。`schedule` 可以是纯整数（间隔**毫秒**）或 5 段 cron 表达式（`分 时 日 月 周`）：
+然后通过 REST 创建任务。`schedule` 可以是纯整数（间隔**毫秒**）或 5 段 cron 表达式（`分 时 日 月 周`，每段支持 `*`、`*/n`、数字、逗号列表和 `1-5` 这样的范围）。cron 按任务可选的 `timezone`（IANA 时区名）的挂钟求值，夏令时切换后节奏保持不变——春季不存在的时间会被跳过，秋季重复的时间只在第一次出现时运行一次。不带 `timezone` 的任务保持原有 UTC 语义：
 
 ```bash
 # 每 6 小时（cron）
 curl -X POST http://localhost:8899/scheduled-runs \
   -H "Content-Type: application/json" \
   -d '{"prompt":"Scan CSI300 for momentum breakouts and backtest the top 5","schedule":"0 */6 * * *"}'
+
+# 工作日 23:30（奥克兰挂钟时间，夏令时不漂移）
+curl -X POST http://localhost:8899/scheduled-runs \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Pre-open scan of NZX names","schedule":"30 23 * * 1-5","timezone":"Pacific/Auckland"}'
 
 # 列出 / 取消
 curl http://localhost:8899/scheduled-runs
