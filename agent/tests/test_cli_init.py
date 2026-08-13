@@ -6,8 +6,13 @@ from unittest.mock import patch
 import cli
 
 
-def _provider_choice(name: str) -> int:
-    return next(i for i, option in enumerate(cli._PROVIDER_CHOICES, 1) if option["provider"] == name)
+def _provider_choice_number(provider: str) -> int:
+    """Return the rendered one-based menu number for a provider."""
+    return next(
+        index
+        for index, choice in enumerate(cli._PROVIDER_CHOICES, start=1)
+        if choice["provider"] == provider
+    )
 
 
 class TestCliInit:
@@ -85,7 +90,11 @@ class TestCliInit:
         env_path = tmp_path / ".env"
 
         with patch.object(cli, "_INIT_ENV_PATH", env_path), \
-             patch.object(cli.IntPrompt, "ask", return_value=_provider_choice("ollama")), \
+             patch.object(
+                 cli.IntPrompt,
+                 "ask",
+                 return_value=_provider_choice_number("ollama"),
+             ), \
              patch.object(
                  cli.Prompt,
                  "ask",
@@ -110,7 +119,11 @@ class TestCliInit:
         env_path = tmp_path / ".env"
 
         with patch.object(cli, "_INIT_ENV_PATH", env_path), \
-             patch.object(cli.IntPrompt, "ask", return_value=_provider_choice("openai-codex")), \
+             patch.object(
+                 cli.IntPrompt,
+                 "ask",
+                 return_value=_provider_choice_number("openai-codex"),
+             ), \
              patch.object(
                  cli.Prompt,
                  "ask",

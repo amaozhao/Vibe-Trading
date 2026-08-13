@@ -6,6 +6,7 @@ Mounted by ``agent/api_server.py`` via ``register_scheduled_routes(app, ...)``.
 from __future__ import annotations
 
 import logging
+import re
 import sys as _sys
 import time
 import uuid
@@ -13,6 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from starlette.responses import Response
 
 from src.config.accessor import get_env_config
 
@@ -25,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 _SCHEDULED_RESEARCH_SCHEDULER_ENV = "VIBE_TRADING_ENABLE_SCHEDULER"
 _SCHEDULED_RESEARCH_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+# Mirrors ``_SAFE_PATH_PARAM_RE`` in src/api/helpers.py, which the delete route
+# enforces on the job id. Kept in sync so a job can never be created under an
+# id the delete route refuses.
+_SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +118,12 @@ class CreateScheduledRunRequest(BaseModel):
     """Request body for POST /scheduled-runs."""
 
     id: Optional[str] = Field(
-        None, description="Job id; auto-generated UUID when omitted"
+        None,
+        description=(
+            "Job id; auto-generated UUID when omitted. Must match the id rule "
+            "the delete route enforces: letters, digits, '_' and '-', 1-128 "
+            "characters."
+        ),
     )
     prompt: str = Field(
         ..., min_length=1, description="Research prompt or backtest description"
@@ -260,15 +272,38 @@ def register_scheduled_routes(
         from src.scheduled_research.models import (
             JobStatus,
             ScheduledResearchJob,
+            is_interval_schedule,
             validate_schedule,
             validate_timezone,
+            validate_timezone_shape,
         )
 
         from src.scheduled_research.executor import next_due
 
+        # A job whose id the delete route rejects can never be cancelled
+        # through the API, so the id is held to that same rule at creation
+        # rather than at first attempted delete.
+        if request.id is not None and not _SAFE_JOB_ID_RE.fullmatch(request.id):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "job id must be 1-128 characters of letters, digits, "
+                    "'_' or '-'"
+                ),
+            )
+
         try:
             validate_schedule(request.schedule)
-            validate_timezone(request.timezone)
+            # Interval schedules ignore the timezone, and the executor
+            # deliberately skips resolving it for them so an interval job keeps
+            # advancing on a host whose timezone database lacks the key. The
+            # create path follows the same rule: only a cron schedule, whose
+            # evaluation actually needs the zone, resolves it. Both forms still
+            # reject a blank value.
+            if is_interval_schedule(request.schedule):
+                validate_timezone_shape(request.timezone)
+            else:
+                validate_timezone(request.timezone)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -276,7 +311,7 @@ def register_scheduled_routes(
         next_run_at = request.next_run_at
         if next_run_at is None:
             next_run_at = now_ms
-            if request.timezone is not None and not request.schedule.strip().isdigit():
+            if request.timezone is not None and not is_interval_schedule(request.schedule):
                 # A timezone-carrying cron job's contract is the authored wall
                 # clock, so its first fire is the first authored occurrence —
                 # not the creation moment. Interval jobs and timezone-less
@@ -319,7 +354,7 @@ def register_scheduled_routes(
         status_code=status.HTTP_204_NO_CONTENT,
         dependencies=[Depends(require_auth)],
     )
-    async def delete_scheduled_run(job_id: str) -> None:
+    async def delete_scheduled_run(job_id: str) -> Response:
         """Cancel (delete) a scheduled research job by id."""
         _host_validate_path_param(job_id, "job_id")
         removed = _get_scheduled_research_store().delete(job_id)
@@ -327,6 +362,7 @@ def register_scheduled_routes(
             raise HTTPException(
                 status_code=404, detail=f"scheduled run {job_id} not found"
             )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # --- Playbook templates ---
     #
