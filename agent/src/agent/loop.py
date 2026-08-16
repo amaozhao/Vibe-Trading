@@ -1076,8 +1076,8 @@ class AgentLoop:
                         break
                     trace.write({"type": "content_filter_skipped", "iter": current_iter})
                     messages.append({
-                        "role": "system",
-                        "content": CONTENT_FILTER_SKIP_MESSAGE,
+                        "role": "user",
+                        "content": f"<system>{CONTENT_FILTER_SKIP_MESSAGE}</system>",
                     })
                     continue
 
@@ -1156,18 +1156,16 @@ class AgentLoop:
                                 )
                                 messages.append(
                                     {
-                                        "role": "system",
-                                        "content": self._grounding.recovery_prompt(
-                                            recovery, validation
-                                        ),
+                                        "role": "user",
+                                        "content": f"<system>{self._grounding.recovery_prompt(recovery, validation)}</system>",
                                     }
                                 )
                                 final_content = ""
                                 continue
                             messages.append(
                                 {
-                                    "role": "system",
-                                    "content": self._grounding.correction_prompt(validation),
+                                    "role": "user",
+                                    "content": f"<system>{self._grounding.correction_prompt(validation)}</system>",
                                 }
                             )
                             final_content = ""
