@@ -14,6 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, is_dataclass
 from typing import Any, Awaitable, Callable, Coroutine, Iterable, Protocol, TypeVar
 
+import httpx
 from fastmcp.client import Client
 from fastmcp.client.auth import OAuth
 from fastmcp.client.client import CallToolResult
@@ -91,6 +92,51 @@ def _fingerprint_auth(auth: MCPOAuthConfig | None) -> str:
         ]
     )
     return _fingerprint(canonical)
+
+
+class _GuardedOAuth(OAuth):
+    """FastMCP OAuth that can refuse to start a browser-based authorization flow.
+
+    Non-interactive callers (background pollers, API request handlers, scheduled
+    jobs) must never have a browser window opened on the host on their behalf.
+    Constructing this provider with ``allow_interactive=False`` turns the
+    browser step into a loud ``RuntimeError`` so the caller can tell the user to
+    run the explicit connect/reconnect step instead. With
+    ``allow_interactive=True`` the provider behaves exactly like
+    :class:`fastmcp.client.auth.OAuth`.
+    """
+
+    def __init__(self, *args: Any, allow_interactive: bool = True, **kwargs: Any) -> None:
+        """Initialize the OAuth provider.
+
+        Args:
+            *args: Positional arguments forwarded to ``fastmcp``'s ``OAuth``.
+            allow_interactive: When False, ``redirect_handler`` raises instead of
+                opening a browser for user consent.
+            **kwargs: Keyword arguments forwarded to ``fastmcp``'s ``OAuth``.
+        """
+        self._allow_interactive = allow_interactive
+        super().__init__(*args, **kwargs)
+
+    async def redirect_handler(self, authorization_url: str) -> None:
+        """Hand the authorization URL to the user's browser, or refuse to.
+
+        Args:
+            authorization_url: Authorization endpoint URL built by the OAuth
+                client for user consent.
+
+        Returns:
+            None.
+
+        Raises:
+            RuntimeError: If this provider was built with
+                ``allow_interactive=False``.
+        """
+        if not self._allow_interactive:
+            raise RuntimeError(
+                "OAuth authorization required; run the interactive connect/reconnect step"
+            )
+        await super().redirect_handler(authorization_url)
 
 
 def _make_cache_key(server_name: str, server_config: "MCPServerConfig") -> tuple[str, ...]:
@@ -421,6 +467,7 @@ class MCPServerAdapter:
         local_server_name: str | None = None,
         client_factory: ClientFactory | None = None,
         max_list_tools_attempts: int = 2,
+        interactive_oauth: bool = True,
     ) -> None:
         """Initialize the MCP server adapter.
 
@@ -434,12 +481,16 @@ class MCPServerAdapter:
                 Defaults to 2 (one transient retry). The authorize bootstrap
                 sets this to 1 so a retry cannot start a second OAuth callback
                 server and orphan an in-progress sign-in.
+            interactive_oauth: When False, an OAuth flow that needs fresh user
+                consent raises instead of opening a browser on the host. Callers
+                that run without a user in front of them pass False.
         """
         self.server_name = server_name
         self.local_server_name = local_server_name or server_name
         self.server_config = server_config
         self._client_factory = client_factory or self._build_client
         self._list_tools_attempts = max(1, max_list_tools_attempts)
+        self._interactive_oauth = interactive_oauth
 
     def discover_tools(self) -> list[MCPRemoteToolSpec]:
         """Discover enabled tools from the remote MCP server.
@@ -450,7 +501,18 @@ class MCPServerAdapter:
         Raises:
             Exception: Propagates discovery failures after retry exhaustion.
         """
-        tools = _run_sync(self._list_tools)
+        try:
+            tools = _run_sync(self._list_tools)
+        except httpx.HTTPStatusError as exc:
+            # Same reason as _http_error_body: discovery propagates raw, so the
+            # traceback the user sees would otherwise carry no server detail.
+            if body := _http_error_body(exc):
+                raise httpx.HTTPStatusError(
+                    f"{exc} - server said: {body}",
+                    request=exc.request,
+                    response=exc.response,
+                ) from exc
+            raise
         seen_names: dict[str, str] = {}
         specs: list[MCPRemoteToolSpec] = []
 
@@ -541,12 +603,21 @@ class MCPServerAdapter:
             auth = None
             if self.server_config.auth is not None:
                 oauth_config = self.server_config.auth
+                # fastmcp's OAuth pre-flights the authorization URL with a
+                # client built by `httpx_client_factory`; httpx defaults that to
+                # a 5 s deadline, which is short for a consent endpoint. Reuse
+                # the server's configured init_timeout instead.
+                oauth_http_timeout = (
+                    self.server_config.init_timeout
+                    if self.server_config.init_timeout is not None
+                    else max(self.server_config.tool_timeout, 30.0)
+                )
                 # `mcp_url` is intentionally omitted — StreamableHttpTransport
                 # calls `auth._bind(self.url)` so the URL fills in from the
                 # transport. Token cache is persistent (FileTreeStore), so the
                 # channel stays authorized across CLI invocations and refresh is
                 # handled inside the MCP lib's OAuthClientProvider.
-                auth = OAuth(
+                auth = _GuardedOAuth(
                     scopes=list(oauth_config.scopes) or None,
                     client_name=oauth_config.client_name,
                     token_storage=_build_token_store(oauth_config.cache_dir),
@@ -554,6 +625,11 @@ class MCPServerAdapter:
                     client_id=oauth_config.client_id,
                     client_secret=oauth_config.client_secret,
                     client_metadata_url=oauth_config.client_metadata_url,
+                    httpx_client_factory=lambda: httpx.AsyncClient(
+                        timeout=oauth_http_timeout,
+                        trust_env=True,
+                    ),
+                    allow_interactive=self._interactive_oauth,
                 )
             transport = StreamableHttpTransport(
                 url=self.server_config.url,
@@ -1161,6 +1237,41 @@ def _message_looks_transient(message: str) -> bool:
     return any(token in lowered for token in _TRANSIENT_ERROR_TOKENS)
 
 
+#: Cap on the remote error body echoed back to the user. Enough for a JSON
+#: error envelope, short enough that a stray HTML page does not fill the log.
+_HTTP_ERROR_BODY_LIMIT = 300
+
+
+def _http_error_body(exc: BaseException) -> str:
+    """Return the response body of an HTTP status error, if there is one.
+
+    ``httpx.HTTPStatusError`` stringifies to the status and URL only, so the
+    server's own explanation is dropped — which turns an auth rejection into an
+    unreadable "Client error 400". IBKR, for one, answers a token it will not
+    accept with ``{"error":"Status failed 500","statusCode":400}`` and a 400,
+    while an unauthenticated request gets a 401 (issue #1126); without the body
+    those two are indistinguishable to the user.
+
+    Args:
+        exc: Exception that may carry an HTTP response.
+
+    Returns:
+        The trimmed body, or ``""`` when there is none to report.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return ""
+    try:
+        body = (response.text or "").strip()
+    except Exception:  # noqa: BLE001 - a body we cannot read is not reportable
+        return ""
+    if not body:
+        return ""
+    if len(body) > _HTTP_ERROR_BODY_LIMIT:
+        body = body[:_HTTP_ERROR_BODY_LIMIT] + "..."
+    return " ".join(body.split())
+
+
 def _format_exception_message(exc: Exception) -> str:
     """Render an exception into a user-facing error string.
 
@@ -1172,7 +1283,10 @@ def _format_exception_message(exc: Exception) -> str:
     """
     if isinstance(exc, McpError) and getattr(exc, "error", None) is not None:
         return getattr(exc.error, "message", str(exc))
-    return str(exc) or type(exc).__name__
+    message = str(exc) or type(exc).__name__
+    if isinstance(exc, httpx.HTTPStatusError) and (body := _http_error_body(exc)):
+        return f"{message} - server said: {body}"
+    return message
 
 
 def _make_jsonable(value: Any) -> Any:

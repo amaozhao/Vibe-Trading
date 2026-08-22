@@ -62,6 +62,187 @@ export interface CorrelationRegimeResponse {
   };
 }
 
+export interface PortfolioPosition {
+  source_id?: string;
+  profile_id?: string;
+  source_label?: string;
+  broker: string;
+  symbol: string;
+  name: string;
+  asset_type: string;
+  market: string;
+  currency: string;
+  quantity: number;
+  cost_price?: number | null;
+  market_price?: number | null;
+  market_value_usd: number;
+  market_value_cny: number;
+  unrealized_pnl_usd?: number | null;
+  priced: boolean;
+  updated_at: string;
+  pricing_basis?: string;
+  price_error?: string;
+}
+
+/**
+ * One portfolio source as of the last refresh.
+ *
+ * A source that could not be read has `status === "error"`, no totals, and
+ * contributes nothing to the snapshot totals; `last_success_at` (when present)
+ * is the timestamp of the last read that did succeed, and is only ever shown
+ * as history — never as a current valuation.
+ */
+export interface PortfolioAccount {
+  source_id?: string;
+  profile_id?: string;
+  label?: string;
+  broker: string;
+  status: "ok" | "error";
+  last_success_at?: string;
+  total_usd?: number | null;
+  total_cny?: number | null;
+  priced_value_usd?: number;
+  cash_usd?: number;
+  unpriced_or_other_usd?: number;
+  position_count?: number;
+  priced_position_count?: number;
+  unpriced_position_count?: number;
+  error_code?: string;
+  error?: string;
+  auth?: {
+    method: string;
+    renewal: "automatic" | "session" | "provider_managed";
+    readonly: boolean;
+    detail: string;
+  };
+}
+
+export interface PortfolioSnapshot {
+  snapshot_id: string;
+  created_at: string;
+  /** False whenever any enabled source did not reach `status === "ok"`. */
+  complete: boolean;
+  display_currency?: "USD" | "CNY";
+  totals: { usd: number; cny: number };
+  valuation?: {
+    priced_usd: number;
+    cash_usd: number;
+    unpriced_or_other_usd: number;
+    identified_coverage: number;
+  };
+  fx: { usd_cny: number; usd_hkd: number; fetched_at: string; stale: boolean };
+  accounts: PortfolioAccount[];
+  positions: PortfolioPosition[];
+  combined_holdings?: Array<{
+    symbol: string;
+    market_value_usd: number;
+    asset_type?: string;
+    brokers?: string[];
+    unrealized_pnl_usd?: number;
+  }>;
+  /** Backend-authored English notes; rendered verbatim, not translated. */
+  warnings: string[];
+}
+
+export interface PortfolioHistoryPoint {
+  id: string;
+  created_at: string;
+  complete: number;
+  total_usd: string;
+  total_cny: string;
+}
+
+export interface PortfolioRefreshState {
+  running: boolean;
+  current: string | null;
+  sources?: Record<string, { status: "idle" | "pending" | "refreshing" | "ok" | "error"; error?: string | null }>;
+  brokers?: Record<string, { status: "idle" | "pending" | "refreshing" | "ok" | "error"; error?: string | null }>;
+}
+
+export interface PortfolioSourceSettings {
+  connection_id: string;
+  label: string;
+  enabled: boolean;
+  order: number;
+  include_cash: boolean;
+}
+
+export interface PortfolioSettings {
+  display_currency: "USD" | "CNY";
+  sources: PortfolioSourceSettings[];
+}
+
+export interface PortfolioSourceCatalogItem {
+  id: string;
+  connection_id: string;
+  profile_id: string;
+  connector: string;
+  label: string;
+  environment: "paper" | "live";
+  transport: "local_tws" | "remote_mcp" | "broker_sdk" | "local_plugin";
+  capabilities: string[];
+  readonly: boolean;
+  notes: string;
+  selected: boolean;
+  source_id?: string | null;
+  supports_reconnect: boolean;
+  credential_fields: CredentialField[];
+  credential_status: Record<string, boolean>;
+  credentials_configured: boolean;
+}
+
+export interface CredentialField {
+  name: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+}
+
+export interface LocalConnection {
+  id: string;
+  profile_id: string;
+  label: string;
+  connector: string;
+  environment: "paper" | "live";
+  transport: "local_tws" | "remote_mcp" | "broker_sdk" | "local_plugin";
+  readonly: boolean;
+  capabilities: string[];
+  supports_reconnect: boolean;
+  credential_fields: CredentialField[];
+  credential_status: Record<string, boolean>;
+  credentials_configured: boolean;
+}
+
+export interface ReadonlyConnectionProfile {
+  id: string;
+  connector: string;
+  label: string;
+  environment: "paper" | "live";
+  transport: "local_tws" | "remote_mcp" | "broker_sdk" | "local_plugin";
+  capabilities: string[];
+  readonly: boolean;
+  notes: string;
+  local_plugin: boolean;
+  credential_fields: CredentialField[];
+  supports_reconnect: boolean;
+  invalid_plugin?: boolean;
+  directory?: string;
+  error?: string;
+}
+
+export interface ConnectionsResponse {
+  status: string;
+  connections: LocalConnection[];
+  profiles: ReadonlyConnectionProfile[];
+  plugin_directory: string;
+}
+
+export interface PortfolioSettingsResponse {
+  status: string;
+  settings: PortfolioSettings;
+  catalog: PortfolioSourceCatalogItem[];
+}
+
 async function errorFromResponse(res: Response): Promise<ApiError> {
   let detail = `HTTP ${res.status}`;
   try {
@@ -137,6 +318,45 @@ export const api = {
     request<CorrelationRegimeResponse>(
       `/correlation/regime?codes=${encodeURIComponent(codes)}&days=${encodeURIComponent(String(days))}`,
     ),
+  getPortfolio: () => request<{ status: string; snapshot: PortfolioSnapshot | null }>("/api/portfolio"),
+  refreshPortfolio: () => request<{ status: string; snapshot: PortfolioSnapshot }>("/api/portfolio/refresh", { method: "POST" }),
+  getPortfolioRefreshStatus: () => request<{ status: string; refresh: PortfolioRefreshState }>("/api/portfolio/refresh-status"),
+  reconnectPortfolioSource: (sourceId: string) =>
+    request<{ status: string; authorized: boolean }>(`/api/portfolio/sources/${encodeURIComponent(sourceId)}/reconnect`, { method: "POST" }),
+  getPortfolioSettings: () => request<PortfolioSettingsResponse>("/api/portfolio/settings"),
+  updatePortfolioSettings: (settings: PortfolioSettings) =>
+    request<PortfolioSettingsResponse>("/api/portfolio/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  getConnections: () => request<ConnectionsResponse>("/api/connections"),
+  createConnection: (payload: { id: string; profile_id: string; label: string }) =>
+    request<{ status: string; connection: LocalConnection }>("/api/connections", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  saveConnectionCredentials: (connectionId: string, values: Record<string, string>) =>
+    request<{ status: string; credential_status: Record<string, boolean> }>(
+      `/api/connections/${encodeURIComponent(connectionId)}/credentials`,
+      { method: "POST", body: JSON.stringify({ values }) },
+    ),
+  checkConnection: (connectionId: string) =>
+    request<{ status: string; connection_id: string; report: Record<string, unknown> }>(
+      `/api/connections/${encodeURIComponent(connectionId)}/check`,
+      { method: "POST" },
+    ),
+  deleteConnection: (connectionId: string) =>
+    request<{ status: string; deleted: string }>(
+      `/api/connections/${encodeURIComponent(connectionId)}`,
+      { method: "DELETE" },
+    ),
+  getPortfolioHistory: (limit = 180) =>
+    request<{ status: string; history: PortfolioHistoryPoint[] }>(`/api/portfolio/history?limit=${encodeURIComponent(String(limit))}`),
+  downloadPortfolioCsv: async () => {
+    const response = await fetch(`${BASE}/api/portfolio/export.csv`, { headers: authHeaders() });
+    if (!response.ok) throw await errorFromResponse(response);
+    return response.blob();
+  },
   listRuns: (limit?: number) => request<RunListItem[]>(`/runs${limit ? `?limit=${encodeURIComponent(String(limit))}` : ""}`),
   getRun: (id: string, params: RunDetailParams = {}) => {
     const q = new URLSearchParams();
@@ -147,6 +367,7 @@ export const api = {
   },
   getRunCode: (id: string) => request<Record<string, string>>(`/runs/${id}/code`),
   getRunFactor: (id: string) => request<FactorReportPayload>(`/runs/${id}/factor`),
+  getRunAttribution: (id: string) => request<AttributionResponse>(`/runs/${encodeURIComponent(id)}/attribution`),
   getRunPine: (id: string) => request<PineScriptResult>(`/runs/${id}/pine`),
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
@@ -318,6 +539,21 @@ export const api = {
 
 // --- Scheduled research types ---
 
+export interface VerdictItem {
+  symbol: string;
+  state: string;
+  reason: string;
+}
+
+export interface VerdictRecord {
+  session_id: string;
+  recorded_at: number;
+  parse: string;
+  outcome: string;
+  items: VerdictItem[];
+  previous: VerdictRecord | null;
+}
+
 export interface ScheduledRun {
   id: string;
   prompt: string;
@@ -331,6 +567,16 @@ export interface ScheduledRun {
   failure_kind: string | null;
   config: Record<string, unknown>;
   timezone: string | null;
+  // Delivery is opt-in per monitor: a null channel means results stay in the
+  // app, which is what every monitor created before this did.
+  delivery_channel: string | null;
+  delivery_target: string | null;
+  delivery_status: string;
+  delivery_error: string | null;
+  delivery_updated_at: number | null;
+  // The latest run's parsed verdict, embedded with its predecessor so the list
+  // renders a delta in one query. Null until a completed run records one.
+  last_verdict: VerdictRecord | null;
 }
 
 export interface CreateScheduledRunRequest {
@@ -339,6 +585,8 @@ export interface CreateScheduledRunRequest {
   schedule: string;
   timezone?: string | null;
   config?: Record<string, unknown>;
+  delivery_channel?: string | null;
+  delivery_target?: string | null;
 }
 
 // --- Swarm types ---
@@ -643,6 +891,70 @@ export interface FactorReportPayload {
   ic_correlation: { labels: string[]; matrix: number[][] } | null;
 }
 
+// --- Attribution types (GET /runs/{runId}/attribution) ---
+
+export interface AttributionBenchmarkInfo {
+  ticker: string | null;
+  mode: "auto_equal_weight" | "explicit";
+}
+
+export interface AttributionRollingPoint {
+  date: string;
+  beta: number;
+  alpha_annualized: number;
+}
+
+export interface AttributionCumulativePoint {
+  date: string;
+  portfolio: number;
+  benchmark: number;
+  /** Portfolio-minus-benchmark cumulative return; plotted as the active line. */
+  active: number;
+}
+
+export interface AttributionFactor {
+  beta: number;
+  alpha_per_period: number;
+  alpha_annualized: number;
+  alpha_t_stat: number;
+  r_squared: number;
+  n_obs: number;
+  rolling_window: number;
+  rolling: AttributionRollingPoint[] | null;
+  cumulative: AttributionCumulativePoint[];
+}
+
+export interface AttributionSectorEntry {
+  sector: string;
+  portfolio_weight: number;
+  benchmark_weight: number;
+  portfolio_return: number;
+  benchmark_return: number;
+  allocation: number;
+  selection: number;
+  interaction: number;
+  total: number;
+}
+
+export interface AttributionBrinson {
+  mode: "symbol" | "asset_class" | "invested_cash";
+  portfolio_return: number;
+  benchmark_return: number;
+  active_return: number;
+  allocation: number;
+  selection: number;
+  interaction: number;
+  sectors: AttributionSectorEntry[];
+}
+
+export interface AttributionResponse {
+  exists: boolean;
+  benchmark: AttributionBenchmarkInfo | null;
+  factor: AttributionFactor | null;
+  brinson: AttributionBrinson | null;
+  notes: string[];
+}
+
 export interface RunData {
   status: string;
   run_id: string;
@@ -670,7 +982,58 @@ export interface RunData {
   artifacts_equity_csv?: Array<Record<string, string>>;
   artifacts_metrics_csv?: Array<Record<string, string>>;
   artifacts_trades_csv?: Array<Record<string, string>>;
+  /** Filled portfolio weights per date (rows: {timestamp, <symbol>: weight-string}). */
+  artifacts_positions_csv?: Array<Record<string, string>>;
+  /** Requested target weights per date, same row shape as artifacts_positions_csv. */
+  artifacts_target_positions_csv?: Array<Record<string, string>>;
   run_logs?: Array<{ source?: string; line_number?: number; message?: string }>;
+}
+
+// --- Positions sector-map types (GET /runs/{runId}/positions/sectors) ---
+
+/** Asset classes reported by the backend sector-map endpoint. */
+export type SectorAssetClass =
+  | "a_share"
+  | "us_equity"
+  | "hk_equity"
+  | "india_equity"
+  | "kr_equity"
+  | "ca_equity"
+  | "crypto"
+  | "futures"
+  | "forex";
+
+export interface SectorInfo {
+  asset_class: SectorAssetClass;
+  /** Resolved industry name, or null when unresolved / not applicable. */
+  industry: string | null;
+  /** Provenance of `industry` (e.g. "eastmoney"), null when unresolved. */
+  industry_source: string | null;
+}
+
+export interface SectorMapResponse {
+  ok: boolean;
+  run_id?: string;
+  resolved_at?: string;
+  cached?: boolean;
+  symbols: Record<string, SectorInfo>;
+  unresolved?: string[];
+  /** Total symbol columns in positions.csv (may exceed `symbol_limit`). */
+  total_symbols?: number;
+  /** Max symbols that receive a network industry lookup per resolve. */
+  symbol_limit?: number;
+  /** Present when the run has no positions artifact. */
+  note?: string;
+}
+
+/**
+ * Fetch the resolved sector map for one run's positions artifact.
+ * Uses the same auth-header + error-envelope conventions as every other
+ * fetcher in this module (via the shared `request` helper).
+ */
+export function fetchRunSectorMap(runId: string, refresh?: boolean): Promise<SectorMapResponse> {
+  const qs = refresh ? "?refresh=1" : "";
+  return request<SectorMapResponse>(`/runs/${encodeURIComponent(runId)}/positions/sectors${qs}`);
 }
 
 export interface RunCard {

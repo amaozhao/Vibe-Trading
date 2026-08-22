@@ -360,6 +360,12 @@ class AgentTuningConfig(_EnvBase):
     vibe_trading_tool_timeout_seconds: float = Field(
         alias="VIBE_TRADING_TOOL_TIMEOUT_SECONDS", default=1800.0,
     )
+    vibe_trading_llm_timeout_seconds: float = Field(
+        alias="VIBE_TRADING_LLM_TIMEOUT_SECONDS", default=300.0,
+    )
+    vibe_trading_run_stall_timeout_seconds: float = Field(
+        alias="VIBE_TRADING_RUN_STALL_TIMEOUT_SECONDS", default=1800.0,
+    )
     vibe_trading_goal_max_continuations: int = Field(
         alias="VIBE_TRADING_GOAL_MAX_CONTINUATIONS", default=3,
     )
@@ -422,6 +428,9 @@ class PathConfig(_EnvBase):
     vibe_goal_session_id: str = Field(alias="VIBE_GOAL_SESSION_ID", default="")
     vibe_trading_strategy_store_db_path: str = Field(
         alias="VIBE_TRADING_STRATEGY_STORE_DB_PATH", default="",
+    )
+    vibe_trading_strategy_discovery_db_path: str = Field(
+        alias="VIBE_TRADING_STRATEGY_DISCOVERY_DB_PATH", default="",
     )
 
 
