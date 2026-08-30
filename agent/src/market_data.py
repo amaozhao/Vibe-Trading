@@ -28,6 +28,10 @@ _SOURCE_PATTERNS = [
     (re.compile(r"^[A-Z0-9&.\-]+\.(NS|BO)$", re.I), "yahoo"),
     # Canada: Toronto Stock Exchange (TD.TO) / TSX Venture (PNG.V).
     (re.compile(r"^[A-Z0-9&.\-]+\.(TO|V)$", re.I), "yahoo"),
+    # UK: London Stock Exchange (VOD.L, SHEL.L). Yahoo serves the suffix
+    # verbatim; without this they fell through to the tushare default and were
+    # routed to China-market loaders that cannot resolve them.
+    (re.compile(r"^[A-Z0-9&.\-]+\.L$", re.I), "yahoo"),
     # Yahoo futures (GC=F, CL=F) and forex (EURUSD=X) suffix conventions —
     # served verbatim by Yahoo's public chart endpoint (#718). Without these,
     # such symbols fell through to the ``tushare`` default and were routed to
@@ -150,7 +154,17 @@ def fetch_market_data(
     """
     from backtest.engines._market_hooks import _detect_market
     from backtest.loaders.base import NoAvailableSourceError
-    from backtest.loaders.registry import FALLBACK_CHAINS, _NO_NETWORK_FALLBACK_SOURCES
+    from backtest.loaders.registry import (
+        FALLBACK_CHAINS,
+        _NO_NETWORK_FALLBACK_SOURCES,
+        get_source_order_override,
+        refresh_source_order_overrides,
+    )
+
+    # Pick up MARKET_DATA_ORDER_* overrides that appeared after this module's
+    # import (e.g. ~/.vibe-trading/.env loaded lazily, or a Settings PUT in
+    # another code path). Snapshot-gated: no-op when nothing changed.
+    refresh_source_order_overrides()
 
     results: dict[str, Any] = {}
     provenance: dict[str, dict[str, Any]] = {}
@@ -199,10 +213,27 @@ def fetch_market_data(
         when every attempt failed).
         """
         chain = _chain_for(src, market)
-        # Start the attempt list with the requested source, then the rest of
-        # the chain (preserving order, no duplicates).
+        # An env-configured order override (MARKET_DATA_ORDER_<MARKET>, set
+        # via the Settings page) rewrites the attempt order for auto-detected
+        # sources: the override list IS the attempt order, so a user who put
+        # tushare first actually starts there. Guards: explicit source
+        # requests stay src-first; the fallback_chain_provider test hook wins;
+        # local:/qveris/tickerall keep their no-network entry point.
+        override = (
+            get_source_order_override(market)
+            if source == "auto"
+            and fallback_chain_provider is None
+            and src not in _NO_NETWORK_FALLBACK_SOURCES
+            else None
+        )
+        candidates = (
+            list(override)
+            if override is not None and src in override
+            else [src, *chain]
+        )
+        # Deduplicate (preserving order), then cap the attempt budget.
         attempts: list[str] = []
-        for candidate in [src, *chain]:
+        for candidate in candidates:
             if candidate not in attempts:
                 attempts.append(candidate)
         attempts = attempts[: max(1, max_fallback_attempts)]
@@ -258,14 +289,22 @@ def fetch_market_data(
         results[symbol] = cap_rows(records, max_rows)
         if include_provenance:
             volume_units = getattr(provider_cls, "volume_units", None) or {}
+            frame_attrs = getattr(df, "attrs", None)
+            frame_attrs = frame_attrs if isinstance(frame_attrs, dict) else {}
+            currency_conversion = frame_attrs.get("currency_conversion")
+            if not isinstance(currency_conversion, str) or not currency_conversion:
+                currency_conversion = "none"
             entry: dict[str, Any] = {
                 "source": used_source or src,
                 "requested_source": source,
                 "detected_source": src,
                 "fallback_used": bool(used_source and used_source != src),
-                "currency_conversion": "none",
+                "currency_conversion": currency_conversion,
                 "volume_unit": volume_units.get(market),
             }
+            quote_currency = frame_attrs.get("quote_currency")
+            if isinstance(quote_currency, str) and quote_currency:
+                entry["quote_currency"] = quote_currency
             if extra_provenance:
                 entry.update(extra_provenance)
             provenance[symbol] = entry
